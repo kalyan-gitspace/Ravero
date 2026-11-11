@@ -6,6 +6,11 @@ const optionalSecretSchema = z.preprocess(
   z.string().min(32).optional(),
 );
 
+const optionalPositiveIntegerSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+  z.coerce.number().int().positive().max(2_147_483_647).optional(),
+);
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -18,6 +23,15 @@ const environmentSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().optional(),
   ),
+  GOOGLE_MAPS_SERVER_API_KEY: z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() || undefined : value),
+    z.string().min(1).optional(),
+  ),
+  GOOGLE_MAPS_MONTHLY_LIMIT_AUTOCOMPLETE_REQUESTS: optionalPositiveIntegerSchema,
+  GOOGLE_MAPS_MONTHLY_LIMIT_PLACE_DETAILS_ESSENTIALS: optionalPositiveIntegerSchema,
+  GOOGLE_MAPS_MONTHLY_LIMIT_GEOCODING: optionalPositiveIntegerSchema,
+  GOOGLE_MAPS_MONTHLY_LIMIT_ROUTES_COMPUTE_ESSENTIALS: optionalPositiveIntegerSchema,
+  GOOGLE_MAPS_MONTHLY_LIMIT_DYNAMIC_MAPS_LOADS: optionalPositiveIntegerSchema,
 });
 
 const parsedEnvironment = environmentSchema.safeParse(process.env);
@@ -29,7 +43,11 @@ if (!parsedEnvironment.success) {
   throw new Error(`Invalid environment configuration: ${invalidVariables.join(', ')}`);
 }
 
-const { DATABASE_URL, ...applicationEnvironment } = parsedEnvironment.data;
+const {
+  DATABASE_URL,
+  GOOGLE_MAPS_SERVER_API_KEY,
+  ...applicationEnvironment
+} = parsedEnvironment.data;
 const { ACCESS_TOKEN_SECRET, OTP_HASH_SECRET, OTP_PROVIDER, ...publicEnvironment } =
   applicationEnvironment;
 
@@ -69,5 +87,15 @@ export const env = {
   OTP_PROVIDER: OTP_PROVIDER ?? (publicEnvironment.NODE_ENV === 'production' ? 'sms' : 'development'),
   DEV_FARE_BASE_AMOUNT: publicEnvironment.DEV_FARE_BASE_AMOUNT,
   DATABASE_URL,
+  GOOGLE_MAPS_SERVER_API_KEY,
+  GOOGLE_MAPS_MONTHLY_LIMIT_AUTOCOMPLETE_REQUESTS:
+    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_AUTOCOMPLETE_REQUESTS,
+  GOOGLE_MAPS_MONTHLY_LIMIT_PLACE_DETAILS_ESSENTIALS:
+    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_PLACE_DETAILS_ESSENTIALS,
+  GOOGLE_MAPS_MONTHLY_LIMIT_GEOCODING: publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_GEOCODING,
+  GOOGLE_MAPS_MONTHLY_LIMIT_ROUTES_COMPUTE_ESSENTIALS:
+    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_ROUTES_COMPUTE_ESSENTIALS,
+  GOOGLE_MAPS_MONTHLY_LIMIT_DYNAMIC_MAPS_LOADS:
+    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_DYNAMIC_MAPS_LOADS,
   isDatabaseConfigured: Boolean(DATABASE_URL),
 } as const;

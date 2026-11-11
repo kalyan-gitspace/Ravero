@@ -222,6 +222,7 @@ model SavedAddress {
   country     String   @default("India") @db.VarChar(80)
   latitude    Decimal? @db.Decimal(9, 6)
   longitude   Decimal? @db.Decimal(9, 6)
+  placeId     String?  @db.VarChar(256)
   isPrimary   Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -383,6 +384,7 @@ model BookingStop {
   address   String   @db.VarChar(255)
   latitude  Decimal? @db.Decimal(9, 6)
   longitude Decimal? @db.Decimal(9, 6)
+  placeId   String?  @db.VarChar(256)
   createdAt DateTime @default(now())
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
@@ -758,4 +760,14 @@ model AppSetting {
   updatedAt   DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+model GoogleMapsMonthlyUsage {
+  month        DateTime @db.Date
+  sku          String   @db.VarChar(64)
+  requestCount Int      @default(0) @map("request_count")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@id([month, sku])
+  @@map("google_maps_monthly_usage")
 }

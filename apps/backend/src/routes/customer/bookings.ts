@@ -10,16 +10,34 @@ import { CustomerBookingService } from '../../booking/service.js';
 import { PrismaBookingRepository } from '../../booking/prismaRepository.js';
 import type { CreateBookingInput } from '../../booking/types.js';
 
-const locationSchema = z.object({
+const stopLocationSchema = z.object({
   label: z.string().trim().min(1).max(120),
   address: z.string().trim().min(3).max(255),
+  latitude: z.number().finite().min(-90).max(90).optional(),
+  longitude: z.number().finite().min(-180).max(180).optional(),
+  placeId: z.string().trim().min(1).max(256).optional(),
+});
+
+const locationSchema = stopLocationSchema.extend({
+  latitude: z.number().finite().min(-90).max(90),
+  longitude: z.number().finite().min(-180).max(180),
 });
 
 const createBookingSchema = z.object({
-  serviceTypeCode: z.enum(['AUTO', 'CAB', 'TWO_WHEELER']),
+  serviceTypeCode: z.enum([
+    'AUTO',
+    'CAB',
+    'TWO_WHEELER',
+    'RENTALS',
+    'PACKAGE',
+    'SCHEDULE',
+    'TRANSPORT',
+    'MACHINERY',
+    'OUTSTATION',
+  ]),
   pickup: locationSchema,
   dropoff: locationSchema,
-  stops: z.array(locationSchema).max(3).default([]),
+  stops: z.array(stopLocationSchema).max(3).default([]),
   scheduledAt: z.iso.datetime().optional(),
 });
 

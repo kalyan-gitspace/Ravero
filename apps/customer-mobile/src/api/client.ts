@@ -9,6 +9,8 @@ import type {
   BookingRequest,
   CustomerProfile,
   CustomerBooking,
+  LocationSuggestion,
+  SelectedLocation,
   SendOtpResponse,
 } from './types';
 
@@ -96,6 +98,98 @@ class CustomerApiClient {
   async getBookings(): Promise<CustomerBooking[]> {
     const result = await this.request<{ bookings: CustomerBooking[] }>('/api/v1/customer/bookings');
     return result.bookings;
+  }
+
+  async autocompletePlaces(
+    input: string,
+    sessionToken: string,
+  ): Promise<LocationSuggestion[]> {
+    const result = await this.request<{
+      suggestions: Array<{ placeId: string; text: string }>;
+    }>(
+      '/api/v1/customer/maps/places/autocomplete',
+      {
+        method: 'POST',
+        body: JSON.stringify({ input, sessionToken }),
+      },
+    );
+    return result.suggestions.map((suggestion) => {
+      const [primaryText, ...addressParts] = suggestion.text.split(',').map((part) => part.trim());
+      return {
+        placeId: suggestion.placeId,
+        primaryText,
+        secondaryText: addressParts.join(', '),
+      };
+    });
+  }
+
+  async getPlaceDetails(
+    placeId: string,
+    sessionToken: string | undefined,
+    label: string,
+  ): Promise<SelectedLocation> {
+    const result = await this.request<{
+      place: { placeId: string; formattedAddress: string; location: { latitude: number; longitude: number } };
+    }>(
+      '/api/v1/customer/maps/places/details',
+      {
+        method: 'POST',
+        body: JSON.stringify({ placeId, ...(sessionToken ? { sessionToken } : {}) }),
+      },
+    );
+    return {
+      label,
+      address: result.place.formattedAddress,
+      placeId: result.place.placeId,
+      latitude: result.place.location.latitude,
+      longitude: result.place.location.longitude,
+    };
+  }
+
+  async reverseGeocode(latitude: number, longitude: number): Promise<SelectedLocation> {
+    const result = await this.request<{
+      result: { placeId: string; formattedAddress: string } | null;
+    }>(
+      '/api/v1/customer/maps/geocoding/reverse',
+      {
+        method: 'POST',
+        body: JSON.stringify({ location: { latitude, longitude } }),
+      },
+    );
+    if (!result.result) {
+      throw new ApiError('Google Maps could not find an address at this location.', 404, 'ADDRESS_NOT_FOUND');
+    }
+    return {
+      label: result.result.formattedAddress.split(',')[0] ?? result.result.formattedAddress,
+      address: result.result.formattedAddress,
+      placeId: result.result.placeId,
+      latitude,
+      longitude,
+    };
+  }
+
+  async reserveDynamicMapLoad(): Promise<void> {
+    await this.request<{ reserved: true }>('/api/v1/customer/maps/dynamic-maps/reserve-load', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  async computeRoute(
+    origin: Pick<SelectedLocation, 'latitude' | 'longitude'>,
+    destination: Pick<SelectedLocation, 'latitude' | 'longitude'>,
+  ): Promise<{ distanceMeters: number; durationSeconds: number }> {
+    const result = await this.request<{
+      route: { distanceMeters: number; duration: string };
+    }>('/api/v1/customer/maps/routes/compute', {
+      method: 'POST',
+      body: JSON.stringify({ origin, destination, travelMode: 'DRIVE' }),
+    });
+    const durationSeconds = Number.parseFloat(result.route.duration);
+    if (!Number.isFinite(result.route.distanceMeters) || !Number.isFinite(durationSeconds)) {
+      throw new ApiError('Google Maps returned an invalid route result.', 502, 'INVALID_ROUTE');
+    }
+    return { distanceMeters: result.route.distanceMeters, durationSeconds };
   }
 
   async getBooking(bookingId: string): Promise<CustomerBooking> {

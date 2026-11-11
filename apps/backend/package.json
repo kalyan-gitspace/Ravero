@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
-    "test": "tsx --test test/auth.test.ts test/booking.test.ts test/cors.test.ts",
+    "test": "tsx --test test/auth.test.ts test/booking.test.ts test/cors.test.ts test/googleMaps.test.ts",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
     "db:migrate:dev": "prisma migrate dev --name init",

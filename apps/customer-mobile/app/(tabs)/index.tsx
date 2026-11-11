@@ -1,44 +1,42 @@
 import {
   Bell,
   ArrowDownUp,
-  ChevronDown,
   ChevronRight,
   Clock3,
   Heart,
-  MapPin,
   Navigation2,
   Plus,
   Search,
   UsersRound,
 } from 'lucide-react-native';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   AppState,
-  Linking,
   Keyboard,
   Modal,
   Image,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Location from 'expo-location';
-import * as SecureStore from 'expo-secure-store';
 import { colors, radii, spacing } from '@ravero/design-tokens';
 import { Icon } from '../../components/Icon';
+import { useLocationSelection } from '../../components/location/LocationSelectionContext';
 import { customerApi } from '../../src/api/client';
 import type { BookingEstimate, BookingLocation, BookingRequest } from '../../src/api/types';
-import { LocationPickerModal, places, type Place } from '../../components/home/LocationPickerModal';
+import type {
+  LocationTarget,
+  RecentLocationReference,
+} from '../../src/location/types';
+import { getRecentLocations } from '../../src/location/recentLocations';
 import { QuickActionCard } from '../../components/home/QuickActionCard';
 import { RecentPlaceRow } from '../../components/home/RecentPlaceRow';
-import { RideCategoryCards, type RideCategory } from '../../components/home/RideCategoryCard';
+import { ServiceCategoryGrid, type RideCategory } from '../../components/home/ServiceCategoryGrid';
 import { SectionHeading } from '../../components/home/SectionHeading';
 import { TitaniumCard } from '../../components/home/TitaniumCard';
 import { getGreetingForTime } from '../../src/utils/greeting';
@@ -50,56 +48,15 @@ const quickActions = [
   { label: 'Favourite places', icon: Heart, route: '/favourites' },
 ] as const;
 
-const recentPlaces = [places[2], places[3], places[4]] satisfies Place[];
-
-const LOCATION_PERMISSION_PROMPT_KEY = 'ravero.location.permission-prompted';
-
-async function hasPromptedLocationPermission(): Promise<boolean> {
-  if (Platform.OS === 'web') {
-    return typeof window !== 'undefined' &&
-      window.localStorage.getItem(LOCATION_PERMISSION_PROMPT_KEY) === 'true';
-  }
-  return (await SecureStore.getItemAsync(LOCATION_PERMISSION_PROMPT_KEY)) === 'true';
-}
-
-async function markLocationPermissionPrompted(): Promise<void> {
-  if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(LOCATION_PERMISSION_PROMPT_KEY, 'true');
-    }
-    return;
-  }
-  await SecureStore.setItemAsync(LOCATION_PERMISSION_PROMPT_KEY, 'true');
-}
-
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const {
-    destination: destinationParam,
-    stops: stopsParam,
-    scheduledAt: scheduledAtParam,
-  } = useLocalSearchParams<{ destination?: string; stops?: string; scheduledAt?: string }>();
-  const [pickup, setPickup] = useState<Place | null>(null);
-  const [locationStatus, setLocationStatus] = useState<
-    | 'checking'
-    | 'needs-explanation'
-    | 'requesting'
-    | 'locating'
-    | 'detected'
-    | 'denied'
-    | 'unavailable'
-    | 'manual'
-  >('checking');
-  const [locationRationaleVisible, setLocationRationaleVisible] = useState(false);
-  const [canOpenLocationSettings, setCanOpenLocationSettings] = useState(false);
+  const { stops: stopsParam, scheduledAt: scheduledAtParam } =
+    useLocalSearchParams<{ stops?: string; scheduledAt?: string }>();
+  const { pickup, drop, swapLocations } = useLocationSelection();
   const [greeting, setGreeting] = useState(() => getGreetingForTime(new Date()));
-  const manualPickupSelected = useRef(false);
-  const locationLookupAttempted = useRef(false);
-  const [destination, setDestination] = useState<Place | null>(null);
-  const [destinationQuery, setDestinationQuery] = useState('');
+  const [recentPlaces, setRecentPlaces] = useState<RecentLocationReference[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<RideCategory>('Auto');
-  const [locationPickerVisible, setLocationPickerVisible] = useState(false);
   const [ridePreviewVisible, setRidePreviewVisible] = useState(false);
   const [bookingRequest, setBookingRequest] = useState<BookingRequest | null>(null);
   const [bookingEstimate, setBookingEstimate] = useState<BookingEstimate | null>(null);
@@ -109,107 +66,7 @@ export default function HomeScreen() {
   const idempotencyKey = useRef<string | null>(null);
   const [stops, setStops] = useState<BookingLocation[]>([]);
   const [scheduledAt, setScheduledAt] = useState<string | undefined>();
-  const updateCurrentLocation = useCallback(async () => {
-    if (manualPickupSelected.current || locationLookupAttempted.current) return;
-    locationLookupAttempted.current = true;
-    setLocationStatus('locating');
-    try {
-      const current = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      const [address] = await Location.reverseGeocodeAsync({
-        latitude: current.coords.latitude,
-        longitude: current.coords.longitude,
-      });
-      const name = address?.district ?? address?.city ?? address?.region ?? address?.name;
-      if (!address || !name) {
-        setLocationStatus('unavailable');
-        return;
-      }
-
-      const addressLine = [
-        address.name,
-        address.street,
-        address.district,
-        address.city,
-        address.region,
-        address.postalCode,
-      ]
-        .filter((part, index, parts): part is string => Boolean(part) && parts.indexOf(part) === index)
-        .join(', ');
-
-      if (manualPickupSelected.current) return;
-      setPickup({ name, address: addressLine || name });
-      setLocationStatus('detected');
-    } catch {
-      setLocationStatus('unavailable');
-    }
-  }, []);
-
-  const checkLocationPermission = useCallback(async () => {
-    if (manualPickupSelected.current) return;
-    try {
-      const permission = await Location.getForegroundPermissionsAsync();
-      if (permission.granted) {
-        setCanOpenLocationSettings(false);
-        await updateCurrentLocation();
-        return;
-      }
-
-      locationLookupAttempted.current = false;
-      setCanOpenLocationSettings(permission.canAskAgain === false);
-      if (
-        permission.canAskAgain &&
-        !(await hasPromptedLocationPermission()) &&
-        (Platform.OS !== 'web' || (typeof navigator !== 'undefined' && 'geolocation' in navigator))
-      ) {
-        setLocationStatus('needs-explanation');
-        setLocationRationaleVisible(true);
-      } else {
-        const geolocationUnavailable =
-          Platform.OS === 'web' &&
-          (typeof navigator === 'undefined' || !('geolocation' in navigator));
-        setLocationStatus(geolocationUnavailable ? 'unavailable' : 'denied');
-      }
-    } catch {
-      const webGeolocationAvailable =
-        Platform.OS === 'web' &&
-        typeof navigator !== 'undefined' &&
-        'geolocation' in navigator;
-      const promptWasShown = await hasPromptedLocationPermission().catch(() => true);
-      if (webGeolocationAvailable && !promptWasShown) {
-        setLocationStatus('needs-explanation');
-        setLocationRationaleVisible(true);
-      } else {
-        setLocationStatus('unavailable');
-      }
-    }
-  }, [updateCurrentLocation]);
-
-  const requestLocationPermission = async () => {
-    setLocationRationaleVisible(false);
-    setLocationStatus('requesting');
-    try {
-      await markLocationPermissionPrompted();
-      const permission = await Location.requestForegroundPermissionsAsync();
-      setCanOpenLocationSettings(permission.canAskAgain === false);
-      if (permission.granted) {
-        await updateCurrentLocation();
-      } else {
-        setLocationStatus('denied');
-      }
-    } catch {
-      setLocationStatus('unavailable');
-    }
-  };
-
-  useEffect(() => {
-    void checkLocationPermission();
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void checkLocationPermission();
-    });
-    return () => subscription.remove();
-  }, [checkLocationPermission]);
+  const [recentPlacesError, setRecentPlacesError] = useState<string | null>(null);
 
   useEffect(() => {
     const refreshGreeting = () => setGreeting(getGreetingForTime(new Date()));
@@ -240,22 +97,26 @@ export default function HomeScreen() {
     };
   }, []);
 
-  const destinationMatches = useMemo(() => {
-    const query = destinationQuery.trim().toLowerCase();
-    if (!query) return [];
-    return places
-      .filter(
-        (place) =>
-          place.name.toLowerCase().includes(query) || place.address.toLowerCase().includes(query),
-      )
-      .slice(0, 3);
-  }, [destinationQuery]);
-
   useEffect(() => {
-    if (typeof destinationParam !== 'string') return;
-    const place = places.find((candidate) => candidate.name === destinationParam);
-    if (place) setDestination(place);
-  }, [destinationParam]);
+    let active = true;
+    void getRecentLocations()
+      .then((locations) => {
+        if (active) {
+          setRecentPlaces(locations);
+          setRecentPlacesError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setRecentPlacesError(
+            error instanceof Error ? error.message : 'Could not load recent locations.',
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [pickup, drop]);
 
   useEffect(() => {
     if (typeof stopsParam !== 'string') return;
@@ -279,52 +140,45 @@ export default function HomeScreen() {
     if (typeof scheduledAtParam === 'string') setScheduledAt(scheduledAtParam);
   }, [scheduledAtParam]);
 
-  const openLocationPicker = () => setLocationPickerVisible(true);
-
-  const selectDestination = (place: Place) => {
-    setDestination(place);
-    setDestinationQuery('');
+  const openLocationPicker = (target: LocationTarget) => {
     Keyboard.dismiss();
+    router.push({ pathname: '/location-search', params: { target } });
   };
 
   const handleReviewRide = () => {
     Keyboard.dismiss();
-    if (!pickup) {
-      setLocationPickerVisible(true);
+    if (!pickup || !drop) {
       return;
     }
 
-    let selectedDestination = destination;
-    if (destination) {
-      selectedDestination = destination;
-    } else {
-      const queryMatch = places.find(
-        (place) =>
-          place.name.toLowerCase() === destinationQuery.trim().toLowerCase() ||
-          place.address.toLowerCase() === destinationQuery.trim().toLowerCase(),
-      );
-      if (queryMatch) {
-        selectedDestination = queryMatch;
-      } else {
-        const customDestination = destinationQuery.trim();
-        if (customDestination) {
-          selectedDestination = { name: customDestination, address: customDestination };
-        }
-      }
-    }
-    if (!selectedDestination) return;
-
-    setDestination(selectedDestination);
-    setDestinationQuery('');
+    const serviceTypeCodes: Record<RideCategory, BookingRequest['serviceTypeCode']> = {
+      Auto: 'AUTO',
+      Cab: 'CAB',
+      'Two-wheeler': 'TWO_WHEELER',
+      Rentals: 'RENTALS',
+      Package: 'PACKAGE',
+      Schedule: 'SCHEDULE',
+      Transport: 'TRANSPORT',
+      Machinery: 'MACHINERY',
+      Outstation: 'OUTSTATION',
+    };
+    const serviceTypeCode = serviceTypeCodes[selectedCategory];
     const request: BookingRequest = {
-      serviceTypeCode:
-        selectedCategory === 'Auto'
-          ? 'AUTO'
-          : selectedCategory === 'Cab'
-            ? 'CAB'
-            : 'TWO_WHEELER',
-      pickup: { label: pickup.name, address: pickup.address },
-      dropoff: { label: selectedDestination.name, address: selectedDestination.address },
+      serviceTypeCode,
+      pickup: {
+        label: pickup.label,
+        address: pickup.address,
+        latitude: pickup.latitude,
+        longitude: pickup.longitude,
+        ...(pickup.placeId ? { placeId: pickup.placeId } : {}),
+      },
+      dropoff: {
+        label: drop.label,
+        address: drop.address,
+        latitude: drop.latitude,
+        longitude: drop.longitude,
+        ...(drop.placeId ? { placeId: drop.placeId } : {}),
+      },
       stops,
       ...(scheduledAt ? { scheduledAt } : {}),
     };
@@ -369,19 +223,6 @@ export default function HomeScreen() {
             source={require('../../assets/branding/ravero-wordmark.png')}
             style={styles.brandLogo}
           />
-          <Pressable
-            accessibilityLabel="Choose pickup location"
-            accessibilityRole="button"
-            onPress={openLocationPicker}
-            style={styles.locationButton}
-          >
-            <Icon color={colors.white} icon={MapPin} size={15} />
-            <Text numberOfLines={1} style={styles.locationText}>
-              {pickup?.name ??
-                (locationStatus === 'locating' ? 'Finding location…' : 'Choose pickup')}
-            </Text>
-            <Icon color="#BDBDBD" icon={ChevronDown} size={14} />
-          </Pressable>
         </View>
         <Pressable
           accessibilityLabel="Open notifications"
@@ -398,21 +239,6 @@ export default function HomeScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {locationStatus === 'denied' || locationStatus === 'unavailable' ? (
-          <View accessibilityRole="alert" style={styles.locationNotice}>
-            <Text style={styles.locationNoticeText}>
-              {locationStatus === 'denied'
-                ? 'Location access is off. Choose a pickup manually or enable location in your browser or device settings.'
-                : 'Current location is unavailable. Choose a pickup manually.'}
-            </Text>
-            {canOpenLocationSettings && Platform.OS !== 'web' ? (
-              <Pressable onPress={() => void Linking.openSettings()}>
-                <Text style={styles.locationSettingsLink}>Open device settings</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-
         <View style={styles.greeting}>
           <Text style={styles.greetingLabel}>{greeting}</Text>
           <Text style={styles.headline}>Where are you{'\n'}going?</Text>
@@ -426,11 +252,15 @@ export default function HomeScreen() {
               <View style={styles.dropMarker} />
             </View>
             <View style={styles.fields}>
-              <Pressable onPress={openLocationPicker} style={styles.pickupField}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => openLocationPicker('pickup')}
+                style={styles.pickupField}
+              >
                 <View style={styles.fieldCopy}>
                   <Text style={styles.fieldLabel}>PICKUP</Text>
                   <Text numberOfLines={1} style={styles.fieldValue}>
-                    {pickup?.name ?? 'Choose pickup'}
+                    {pickup?.label ?? 'Choose pickup'}
                     {pickup?.address ? (
                       <Text style={styles.addressInline}> · {pickup.address}</Text>
                     ) : null}
@@ -440,42 +270,28 @@ export default function HomeScreen() {
               </Pressable>
               <View style={styles.divider} />
               <View style={styles.destinationField}>
-                <View style={styles.fieldCopy}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => openLocationPicker('drop')}
+                  style={styles.fieldCopy}
+                >
                   <Text style={styles.fieldLabel}>DROP</Text>
-                  <TextInput
-                    accessibilityLabel="Destination"
-                    autoCapitalize="words"
-                    onChangeText={(text) => {
-                      setDestination(null);
-                      setDestinationQuery(text);
-                    }}
-                    onFocus={() => {
-                      if (destination) {
-                        setDestinationQuery(destination.name);
-                        setDestination(null);
-                      }
-                    }}
-                    onSubmitEditing={handleReviewRide}
-                    placeholder="Where to?"
-                    placeholderTextColor={colors.textSecondary}
-                    returnKeyType="search"
-                    style={styles.destinationInput}
-                    value={destination?.name ?? destinationQuery}
-                  />
-                </View>
+                  <Text numberOfLines={1} style={styles.destinationInput}>
+                    {drop?.label ?? 'Where to?'}
+                    {drop?.address ? (
+                      <Text style={styles.addressInline}> · {drop.address}</Text>
+                    ) : null}
+                  </Text>
+                </Pressable>
                 <Pressable
                   accessibilityLabel="Swap pickup and destination"
-                  disabled={!destination || !pickup}
-                  onPress={() => {
-                    if (!destination || !pickup) return;
-                    manualPickupSelected.current = true;
-                    setPickup(destination);
-                    setDestination(pickup);
-                  }}
-                  style={[styles.swapButton, (!destination || !pickup) && styles.swapDisabled]}
+                  accessibilityRole="button"
+                  disabled={!drop || !pickup}
+                  onPress={swapLocations}
+                  style={[styles.swapButton, (!drop || !pickup) && styles.swapDisabled]}
                 >
                   <Icon
-                    color={destination ? colors.black : '#AAAAAA'}
+                    color={drop && pickup ? colors.black : '#AAAAAA'}
                     icon={ArrowDownUp}
                     size={17}
                   />
@@ -483,33 +299,11 @@ export default function HomeScreen() {
               </View>
             </View>
           </View>
-
-          {destinationMatches.length > 0 ? (
-            <View style={styles.suggestions}>
-              {destinationMatches.map((place) => (
-                <Pressable
-                  key={place.name}
-                  onPress={() => selectDestination(place)}
-                  style={styles.suggestion}
-                >
-                  <View style={styles.suggestionIcon}>
-                    <Icon color={colors.textSecondary} icon={MapPin} size={17} />
-                  </View>
-                  <View style={styles.suggestionCopy}>
-                    <Text style={styles.suggestionName}>{place.name}</Text>
-                    <Text numberOfLines={1} style={styles.suggestionAddress}>
-                      {place.address}
-                    </Text>
-                  </View>
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
         </View>
 
         <View style={styles.section}>
-          <SectionHeading title="Choose a ride category" />
-          <RideCategoryCards selected={selectedCategory} onSelect={setSelectedCategory} />
+          <SectionHeading title="Choose a service category" />
+          <ServiceCategoryGrid selected={selectedCategory} onSelect={setSelectedCategory} />
           <Text style={styles.note}>
             Categories are for preview only. Availability and eligibility are subject to confirmation.
           </Text>
@@ -517,17 +311,33 @@ export default function HomeScreen() {
 
         <Pressable
           accessibilityRole="button"
-          disabled={!destination && !destinationQuery.trim()}
+          disabled={!pickup || !drop || !selectedCategory}
           onPress={handleReviewRide}
           style={({ pressed }) => [
             styles.searchButton,
-            (!destination && !destinationQuery.trim()) && styles.searchButtonDisabled,
+            (!pickup || !drop || !selectedCategory) && styles.searchButtonDisabled,
             pressed && styles.pressed,
           ]}
         >
-          <Icon color={colors.white} icon={Search} size={18} />
-          <Text style={styles.searchButtonText}>Review ride</Text>
+          <Icon
+            color={pickup && drop && selectedCategory ? colors.white : colors.textSecondary}
+            icon={Search}
+            size={18}
+          />
+          <Text
+            style={[
+              styles.searchButtonText,
+              (!pickup || !drop || !selectedCategory) && styles.searchButtonTextDisabled,
+            ]}
+          >
+            Review ride
+          </Text>
         </Pressable>
+        {bookingError && !ridePreviewVisible ? (
+          <Text accessibilityRole="alert" style={styles.bookingError}>
+            {bookingError}
+          </Text>
+        ) : null}
 
         <View style={styles.section}>
           <SectionHeading title="Make it yours" />
@@ -541,7 +351,7 @@ export default function HomeScreen() {
                   router.push({
                     pathname: action.route,
                     params: {
-                      ...(destination ? { destination: destination.name } : {}),
+                      ...(drop ? { destination: drop.label } : {}),
                       ...(stops.length > 0
                         ? { stops: JSON.stringify(stops.map((stop) => stop.address)) }
                         : {}),
@@ -563,12 +373,28 @@ export default function HomeScreen() {
           <View style={styles.recentList}>
             {recentPlaces.map((place) => (
               <RecentPlaceRow
-                key={place.name}
-                onPress={() => selectDestination(place)}
-                place={place}
+                key={place.placeId}
+                onPress={() =>
+                  router.push({
+                    pathname: '/location-search',
+                    params: { target: 'drop', placeId: place.placeId, query: place.query },
+                  })
+                }
+                place={{
+                  name: place.query || 'Recent location',
+                  address: 'Tap to refresh place details',
+                }}
               />
             ))}
           </View>
+          {recentPlaces.length === 0 && !recentPlacesError ? (
+            <Text style={styles.note}>Your recent locations will appear here.</Text>
+          ) : null}
+          {recentPlacesError ? (
+            <Text accessibilityRole="alert" style={styles.locationNoticeText}>
+              {recentPlacesError}
+            </Text>
+          ) : null}
         </View>
 
         <View style={styles.section}>
@@ -578,57 +404,6 @@ export default function HomeScreen() {
           Booking requests are saved for development review. No routing, driver matching, payment, or dispatch is connected.
         </Text>
       </ScrollView>
-
-      <LocationPickerModal
-        onClose={() => setLocationPickerVisible(false)}
-        onSelect={(place) => {
-          manualPickupSelected.current = true;
-          setPickup(place);
-          setLocationStatus('manual');
-          setLocationPickerVisible(false);
-        }}
-        title="Choose pickup"
-        visible={locationPickerVisible}
-      />
-
-      <Modal
-        animationType="fade"
-        onRequestClose={() => {
-          void markLocationPermissionPrompted().catch(() => setLocationStatus('unavailable'));
-          setLocationRationaleVisible(false);
-          setLocationStatus('denied');
-        }}
-        transparent
-        visible={locationRationaleVisible}
-      >
-        <View style={styles.locationRationaleScrim}>
-          <View style={styles.locationRationaleCard}>
-            <Text style={styles.locationRationaleTitle}>Use your current location?</Text>
-            <Text style={styles.locationRationaleCopy}>
-              RAVERO uses your location while the app is open to suggest a pickup in this header.
-              Your coordinates are not sent to RAVERO servers just to display this location.
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => void requestLocationPermission()}
-              style={styles.locationRationalePrimary}
-            >
-              <Text style={styles.locationRationalePrimaryText}>Continue</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                void markLocationPermissionPrompted().catch(() => setLocationStatus('unavailable'));
-                setLocationRationaleVisible(false);
-                setLocationStatus('denied');
-              }}
-              style={styles.locationRationaleSecondary}
-            >
-              <Text style={styles.locationRationaleSecondaryText}>Choose pickup manually</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
 
       <Modal
         animationType="fade"
@@ -645,10 +420,10 @@ export default function HomeScreen() {
             <Text style={styles.previewSubtitle}>Review the request details before saving.</Text>
             <View style={styles.previewRoute}>
               <Text style={styles.previewLabel}>FROM</Text>
-              <Text style={styles.previewValue}>{pickup?.name ?? 'Pickup not selected'}</Text>
+              <Text style={styles.previewValue}>{pickup?.label ?? 'Pickup not selected'}</Text>
               <View style={styles.previewDivider} />
               <Text style={styles.previewLabel}>TO</Text>
-              <Text style={styles.previewValue}>{destination?.name ?? destinationQuery}</Text>
+              <Text style={styles.previewValue}>{drop?.label ?? 'Drop not selected'}</Text>
             </View>
             <View style={styles.previewCategory}>
               <Text style={styles.previewLabel}>CATEGORY</Text>
@@ -741,21 +516,6 @@ const styles = StyleSheet.create({
     width: 108,
     height: 24,
   },
-  locationButton: {
-    flex: 1,
-    minWidth: 0,
-    maxWidth: 190,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: spacing.sm,
-  },
-  locationText: {
-    flexShrink: 1,
-    color: '#E5E5E5',
-    fontSize: 12,
-    fontWeight: '500',
-  },
   headerAction: {
     width: 38,
     height: 38,
@@ -779,64 +539,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 18,
-  },
-  locationSettingsLink: {
-    marginTop: spacing.sm,
-    color: colors.black,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  locationRationaleScrim: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing.lg,
-    backgroundColor: 'rgba(0,0,0,0.42)',
-  },
-  locationRationaleCard: {
-    width: '100%',
-    maxWidth: 380,
-    padding: spacing.lg,
-    borderRadius: radii.lg,
-    backgroundColor: colors.white,
-  },
-  locationRationaleTitle: {
-    color: colors.black,
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  locationRationaleCopy: {
-    marginTop: spacing.sm,
-    color: colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 21,
-  },
-  locationRationalePrimary: {
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.lg,
-    borderRadius: radii.md,
-    backgroundColor: colors.black,
-  },
-  locationRationalePrimaryText: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  locationRationaleSecondary: {
-    minHeight: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-  },
-  locationRationaleSecondaryText: {
-    color: colors.black,
-    fontSize: 13,
-    fontWeight: '600',
   },
   greeting: {
     paddingTop: spacing.lg,
@@ -951,38 +653,6 @@ const styles = StyleSheet.create({
   swapDisabled: {
     backgroundColor: colors.greyLight,
   },
-  suggestions: {
-    marginTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  suggestion: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.sm + 2,
-  },
-  suggestionIcon: {
-    width: 34,
-    height: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 17,
-    backgroundColor: colors.greyLight,
-  },
-  suggestionCopy: {
-    flex: 1,
-  },
-  suggestionName: {
-    color: colors.black,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  suggestionAddress: {
-    marginTop: 2,
-    color: colors.textSecondary,
-    fontSize: 11,
-  },
   section: {
     marginTop: spacing.xl,
   },
@@ -1003,7 +673,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.black,
   },
   searchButtonDisabled: {
-    opacity: 0.4,
+    backgroundColor: colors.greyLight,
+  },
+  searchButtonTextDisabled: {
+    color: colors.textSecondary,
   },
   searchButtonText: {
     color: colors.white,

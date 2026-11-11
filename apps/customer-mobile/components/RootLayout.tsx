@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useCustomerAuth } from './auth/AuthProvider';
 import { AuthNavigator } from './auth/AuthNavigator';
+import { LocationSelectionProvider } from './location/LocationSelectionContext';
 
 void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   console.error('Could not hold the native RAVERO splash screen.', error);
@@ -70,10 +71,12 @@ function AppContent() {
   return (
     <>
       <StatusBar hidden={splashVisible} style={splashVisible ? 'light' : 'dark'} />
-      <Stack
-        screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#FFFFFF' } }}
-      />
-      <AuthNavigator />
+      <LocationSelectionProvider>
+        <Stack
+          screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#FFFFFF' } }}
+        />
+        <AuthNavigator />
+      </LocationSelectionProvider>
       {splashVisible ? (
         <View onLayout={hideNativeSplash} style={styles.splash}>
           <Animated.View style={[styles.logoFrame, { opacity }]}>

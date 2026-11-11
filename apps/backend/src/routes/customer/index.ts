@@ -5,11 +5,13 @@ import type { CustomerAuthService } from '../../auth/service.js';
 import { requireCustomer } from '../../middleware/requireCustomer.js';
 import { validateBody } from '../../middleware/validateRequest.js';
 import { bookingRouter } from './bookings.js';
+import { createGoogleMapsRouter } from './googleMaps.js';
 
 export function createCustomerRouter(authService: CustomerAuthService): Router {
   const router = createRouter();
 
   router.use('/bookings', bookingRouter);
+  router.use('/maps', createGoogleMapsRouter(authService));
 
   router.get('/profile', requireCustomer(authService), async (request, response) => {
     const auth = request.customerAuth;

@@ -1,6 +1,9 @@
 export interface BookingLocationInput {
   label: string;
   address: string;
+  latitude?: number;
+  longitude?: number;
+  placeId?: string;
 }
 
 export interface CreateBookingInput {

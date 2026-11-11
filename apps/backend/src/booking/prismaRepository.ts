@@ -27,12 +27,35 @@ function toBookingRecord(booking: BookingWithRelations): BookingRecord {
     id: booking.id,
     status: booking.status,
     serviceType: { code: booking.serviceType.code, name: booking.serviceType.name },
-    pickup: { label: booking.pickupAddress.label, address: booking.pickupAddress.addressLine },
+    pickup: {
+      label: booking.pickupAddress.label,
+      address: booking.pickupAddress.addressLine,
+      ...(booking.pickupAddress.latitude !== null
+        ? { latitude: Number(booking.pickupAddress.latitude) }
+        : {}),
+      ...(booking.pickupAddress.longitude !== null
+        ? { longitude: Number(booking.pickupAddress.longitude) }
+        : {}),
+      ...(booking.pickupAddress.placeId ? { placeId: booking.pickupAddress.placeId } : {}),
+    },
     dropoff: {
       label: booking.dropoffAddress?.label ?? '',
       address: booking.dropoffAddress?.addressLine ?? '',
+      ...(booking.dropoffAddress?.latitude !== null && booking.dropoffAddress?.latitude !== undefined
+        ? { latitude: Number(booking.dropoffAddress.latitude) }
+        : {}),
+      ...(booking.dropoffAddress?.longitude !== null && booking.dropoffAddress?.longitude !== undefined
+        ? { longitude: Number(booking.dropoffAddress.longitude) }
+        : {}),
+      ...(booking.dropoffAddress?.placeId ? { placeId: booking.dropoffAddress.placeId } : {}),
     },
-    stops: booking.stops.map((stop) => ({ label: stop.label, address: stop.address })),
+    stops: booking.stops.map((stop) => ({
+      label: stop.label,
+      address: stop.address,
+      ...(stop.latitude !== null ? { latitude: Number(stop.latitude) } : {}),
+      ...(stop.longitude !== null ? { longitude: Number(stop.longitude) } : {}),
+      ...(stop.placeId ? { placeId: stop.placeId } : {}),
+    })),
     scheduledAt: booking.scheduledAt,
     fareEstimate: {
       currency: 'INR',
@@ -95,6 +118,9 @@ export class PrismaBookingRepository implements BookingRepository {
             addressLine: data.request.pickup.address,
             city: 'Not specified',
             state: 'Not specified',
+            latitude: data.request.pickup.latitude,
+            longitude: data.request.pickup.longitude,
+            placeId: data.request.pickup.placeId,
           },
         });
         const dropoff = await transaction.savedAddress.create({
@@ -104,6 +130,9 @@ export class PrismaBookingRepository implements BookingRepository {
             addressLine: data.request.dropoff.address,
             city: 'Not specified',
             state: 'Not specified',
+            latitude: data.request.dropoff.latitude,
+            longitude: data.request.dropoff.longitude,
+            placeId: data.request.dropoff.placeId,
           },
         });
         const booking = await transaction.booking.create({
@@ -121,6 +150,9 @@ export class PrismaBookingRepository implements BookingRepository {
                 sequence: index + 1,
                 label: stop.label,
                 address: stop.address,
+                latitude: stop.latitude,
+                longitude: stop.longitude,
+                placeId: stop.placeId,
               })),
             },
             fareEstimate: {

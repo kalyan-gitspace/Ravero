@@ -24,10 +24,33 @@ export interface SendOtpResponse {
 export interface BookingLocation {
   label: string;
   address: string;
+  latitude?: number;
+  longitude?: number;
+  placeId?: string;
+}
+
+export interface LocationSuggestion {
+  placeId: string;
+  primaryText: string;
+  secondaryText: string;
+}
+
+export interface SelectedLocation extends BookingLocation {
+  latitude: number;
+  longitude: number;
 }
 
 export interface BookingRequest {
-  serviceTypeCode: 'AUTO' | 'CAB' | 'TWO_WHEELER';
+  serviceTypeCode:
+    | 'AUTO'
+    | 'CAB'
+    | 'TWO_WHEELER'
+    | 'RENTALS'
+    | 'PACKAGE'
+    | 'SCHEDULE'
+    | 'TRANSPORT'
+    | 'MACHINERY'
+    | 'OUTSTATION';
   pickup: BookingLocation;
   dropoff: BookingLocation;
   stops: BookingLocation[];
