@@ -1,0 +1,22 @@
+:root {
+  --ravero-white: #ffffff;
+  --ravero-black: #000000;
+  --ravero-text-primary: #000000;
+  --ravero-text-secondary: #666666;
+  --ravero-grey-light: #f5f5f5;
+  --ravero-border: #e5e5e5;
+  --ravero-font-sans: Inter, Arial, sans-serif;
+  --ravero-radius-sm: 4px;
+  --ravero-radius-md: 8px;
+  --ravero-radius-lg: 12px;
+}
+
+@theme {
+  --color-ravero-white: var(--ravero-white);
+  --color-ravero-black: var(--ravero-black);
+  --color-ravero-text-primary: var(--ravero-text-primary);
+  --color-ravero-text-secondary: var(--ravero-text-secondary);
+  --color-ravero-grey-light: var(--ravero-grey-light);
+  --color-ravero-border: var(--ravero-border);
+  --font-sans: var(--ravero-font-sans);
+}

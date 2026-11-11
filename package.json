@@ -1,0 +1,16 @@
+{
+  "name": "ravero",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.18.0",
+  "scripts": {
+    "dev:customer-mobile": "corepack pnpm --filter @ravero/customer-mobile start",
+    "dev:driver-mobile": "corepack pnpm --filter @ravero/driver-mobile start",
+    "dev:website": "corepack pnpm --filter @ravero/website dev",
+    "dev:backend": "corepack pnpm --filter @ravero/backend dev",
+    "build": "corepack pnpm -r --if-present build",
+    "typecheck": "corepack pnpm -r --if-present typecheck",
+    "lint": "corepack pnpm -r --if-present lint",
+    "test": "corepack pnpm -r --if-present test"
+  }
+}

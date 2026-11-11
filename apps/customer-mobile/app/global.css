@@ -1,0 +1,40 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+  background: #f5f5f5;
+}
+
+#root {
+  width: 100%;
+  max-width: 430px;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+@media (max-width: 430px) {
+  body {
+    background: #ffffff;
+  }
+}
+
+#customer-tab-bar-glass {
+  background-color: rgba(255, 255, 255, 0.01) !important;
+  -webkit-backdrop-filter: blur(2.5px) saturate(115%) !important;
+  backdrop-filter: blur(2.5px) saturate(115%) !important;
+}
+
+#customer-tab-bar-positioner {
+  z-index: 20;
+}

@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@import "@ravero/design-tokens/styles.css";
+
+:root {
+  font-family: var(--ravero-font-sans);
+  color: var(--ravero-text-primary);
+  background: var(--ravero-white);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
