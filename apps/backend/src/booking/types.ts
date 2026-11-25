@@ -11,16 +11,32 @@ export interface CreateBookingInput {
   pickup: BookingLocationInput;
   dropoff: BookingLocationInput;
   stops: BookingLocationInput[];
+  fareRouteToken: string;
   scheduledAt?: Date;
+}
+
+export interface FareSlabBreakdown {
+  label: string;
+  distanceKm?: number;
+  ratePerKm?: number | null;
+  amount: number;
 }
 
 export interface FareEstimate {
   currency: 'INR';
+  distanceMeters: number;
+  distanceKm: number;
+  estimatedDurationSeconds: number;
+  estimatedDurationMinutes: number;
   baseAmount: number;
   distanceAmount: number;
   timeAmount: number;
+  platformFeeAmount: number;
+  driverCommissionAmount: number;
   totalAmount: number;
-  isDevelopmentEstimate: true;
+  roundingPolicy: 'NEAREST_PAISE_HALF_UP_FINAL_TOTAL';
+  distanceBreakdown?: FareSlabBreakdown[];
+  isDevelopmentEstimate: false;
   expiresAt: string;
 }
 
@@ -34,6 +50,7 @@ export interface BookingRecord {
   scheduledAt: Date | null;
   fareEstimate: FareEstimate;
   paymentMode: 'CASH';
+  paymentStatus: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,6 +72,11 @@ export interface CreateBookingRecordInput {
 
 export interface BookingRepository {
   getActiveServiceType(code: string): Promise<ServiceTypeRecord | null>;
+  getIdempotentBooking(
+    customerId: string,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<BookingRecord | null>;
   createBooking(data: CreateBookingRecordInput): Promise<BookingRecord>;
   listBookings(customerId: string): Promise<BookingRecord[]>;
   getBooking(customerId: string, bookingId: string): Promise<BookingRecord | null>;

@@ -190,7 +190,6 @@ The response contains the updated customer object in `data.customer`.
 | `OTP_PROVIDER` | `development` (local only) or `sms` |
 | `ACCESS_TOKEN_SECRET` | HMAC signing secret; at least 32 characters in production |
 | `OTP_HASH_SECRET` | Key for OTP HMAC hashes; at least 32 characters in production |
-| `DEV_FARE_BASE_AMOUNT` | Local-only placeholder base amount (INR) for development booking estimates; never a production quote |
 
 Secrets are not committed. In development, omitted token and OTP secrets are randomly generated per process; existing access tokens and outstanding OTP challenges become invalid when the backend restarts. Configure stable local secrets in the ignored backend `.env` file when persistent development sessions are needed.
 

@@ -1,85 +1,19 @@
 import { ArrowLeft, MapPin } from 'lucide-react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Map as MapLibreGLMap } from 'maplibre-gl';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, radii, spacing } from '@ravero/design-tokens';
 import { Icon } from '../components/Icon';
+import { configureWebMapLibreWorker } from '../components/maps/configureWebMapLibreWorker';
 import { useLocationSelection } from '../components/location/LocationSelectionContext';
 import { customerApi } from '../src/api/client';
 import type { LocationTarget } from '../src/location/types';
 import { saveRecentLocation } from '../src/location/recentLocations';
 
 const INITIAL_CENTER = { latitude: 17.385, longitude: 78.4867 };
-const MAP_CONTAINER_ID = 'ravero-google-map-container';
-const GOOGLE_MAPS_WEB_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
-
-interface GoogleMapInstance {
-  getCenter(): { lat: () => number; lng: () => number } | null;
-}
-
-interface GoogleMapsApi {
-  maps: {
-    Map: new (
-      container: HTMLElement,
-      options: {
-        center: { lat: number; lng: number };
-        zoom: number;
-        disableDefaultUI: boolean;
-        gestureHandling: 'greedy';
-      },
-    ) => GoogleMapInstance;
-    event: {
-      addListener(
-        instance: GoogleMapInstance,
-        event: 'idle',
-        handler: () => void,
-      ): { remove: () => void };
-    };
-  };
-}
-
-declare global {
-  interface Window {
-    google?: GoogleMapsApi;
-    gm_authFailure?: () => void;
-  }
-}
-
-let googleMapsApiPromise: Promise<GoogleMapsApi> | null = null;
-
-function loadGoogleMapsApi(apiKey: string): Promise<GoogleMapsApi> {
-  if (window.google) return Promise.resolve(window.google);
-  if (googleMapsApiPromise) return googleMapsApiPromise;
-
-  googleMapsApiPromise = new Promise<GoogleMapsApi>((resolve, reject) => {
-    const script = document.createElement('script');
-    const url = new URL('https://maps.googleapis.com/maps/api/js');
-    url.searchParams.set('key', apiKey);
-    url.searchParams.set('v', 'weekly');
-    url.searchParams.set('loading', 'async');
-    script.src = url.toString();
-    script.async = true;
-    script.dataset.raveroGoogleMaps = 'true';
-    script.onload = () => {
-      if (window.google) resolve(window.google);
-      else reject(new Error('Google Maps JavaScript API loaded without its map library.'));
-    };
-    script.onerror = () => reject(new Error('Could not load Google Maps JavaScript API.'));
-    document.head.appendChild(script);
-  }).catch((error: unknown) => {
-    googleMapsApiPromise = null;
-    throw error;
-  });
-
-  return googleMapsApiPromise;
-}
-
-function isCoordinates(
-  value: { latitude: number; longitude: number },
-): boolean {
-  return Number.isFinite(value.latitude) && Number.isFinite(value.longitude);
-}
+const MAP_CONTAINER_ID = 'ravero-maplibre-map-container';
 
 export default function LocationMapWebScreen() {
   const router = useRouter();
@@ -87,75 +21,73 @@ export default function LocationMapWebScreen() {
   const target: LocationTarget = params.target === 'drop' ? 'drop' : 'pickup';
   const { selectLocation } = useLocationSelection();
   const [center, setCenter] = useState(INITIAL_CENTER);
+  const [attribution, setAttribution] = useState('© OpenStreetMap contributors · OpenFreeMap');
   const [mapReady, setMapReady] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [loadingMessage, setLoadingMessage] = useState('Preparing Google Maps…');
-  const mapRef = useRef<GoogleMapInstance | null>(null);
 
   useEffect(() => {
-    if (!GOOGLE_MAPS_WEB_API_KEY) {
-      setMessage(
-        'Google Maps web key is missing. Set EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY in apps/customer-mobile/.env and reload the web app.',
-      );
-      return;
-    }
-
     let active = true;
-    let idleListener: { remove: () => void } | undefined;
-    const previousAuthFailure = window.gm_authFailure;
-    window.gm_authFailure = () => {
-      if (!active) return;
-      setMessage(
-        'Google Maps rejected the web key. Verify Maps JavaScript API is enabled and the key allows this website origin.',
-      );
-      setMapReady(false);
-    };
-
-    const initializeMap = async () => {
-      try {
-        setLoadingMessage('Checking the Google Maps usage limit…');
-        await customerApi.reserveDynamicMapLoad();
+    let styleLoaded = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let map: MapLibreGLMap | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    void customerApi.getMapConfig()
+      .then((config) => {
         if (!active) return;
-
-        setLoadingMessage('Loading Google Maps…');
-        const google = await loadGoogleMapsApi(GOOGLE_MAPS_WEB_API_KEY);
-        if (!active) return;
-
         const container = document.getElementById(MAP_CONTAINER_ID);
-        if (!container) throw new Error('Google Maps could not find its map container.');
+        if (!container) throw new Error('OpenFreeMap could not find its map container.');
 
-        const map = new google.maps.Map(container, {
-          center: { lat: INITIAL_CENTER.latitude, lng: INITIAL_CENTER.longitude },
-          zoom: 14,
-          disableDefaultUI: true,
-          gestureHandling: 'greedy',
+        setAttribution(config.attribution);
+        configureWebMapLibreWorker();
+        map = new MapLibreGLMap({
+          container,
+          style: config.tileStyleUrl,
+          center: [config.defaultCenter.longitude, config.defaultCenter.latitude],
+          zoom: config.defaultZoom,
         });
-        mapRef.current = map;
-        idleListener = google.maps.event.addListener(map, 'idle', () => {
-          const mapCenter = map.getCenter();
-          if (!mapCenter) return;
-          const nextCenter = { latitude: mapCenter.lat(), longitude: mapCenter.lng() };
-          if (isCoordinates(nextCenter)) setCenter(nextCenter);
+        if (typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(() => map?.resize());
+          resizeObserver.observe(container);
+        }
+        timeout = setTimeout(() => {
+          if (active && !styleLoaded) {
+            setMessage('OpenFreeMap did not finish loading. Check your internet connection and try again.');
+          }
+        }, 20_000);
+        map.once('load', () => {
+          styleLoaded = true;
+          if (timeout) clearTimeout(timeout);
+          if (active) {
+            setMessage(null);
+            setMapReady(true);
+          }
         });
-        setMapReady(true);
-      } catch (error) {
+        map.on('moveend', () => {
+          if (!map) return;
+          const { lat, lng } = map.getCenter();
+          setCenter({ latitude: lat, longitude: lng });
+        });
+        map.on('error', (event) => {
+          if (active && !styleLoaded) {
+            if (timeout) clearTimeout(timeout);
+            setMessage(event.error.message);
+          }
+        });
+      })
+      .catch((error: unknown) => {
         if (active) {
           setMessage(
-            error instanceof Error
-              ? error.message
-              : 'Google Maps could not be initialized. Check the Maps JavaScript API key and network.',
+            error instanceof Error ? error.message : 'Map configuration is unavailable.',
           );
         }
-      }
-    };
+      });
 
-    void initializeMap();
     return () => {
       active = false;
-      idleListener?.remove();
-      mapRef.current = null;
-      window.gm_authFailure = previousAuthFailure;
+      if (timeout) clearTimeout(timeout);
+      resizeObserver?.disconnect();
+      map?.remove();
     };
   }, []);
 
@@ -195,28 +127,17 @@ export default function LocationMapWebScreen() {
       </View>
 
       <View style={styles.mapArea}>
-        {GOOGLE_MAPS_WEB_API_KEY ? (
-          <View nativeID={MAP_CONTAINER_ID} style={StyleSheet.absoluteFill} />
-        ) : (
-          <View style={styles.mapUnavailable}>
-            <Icon color={colors.textSecondary} icon={MapPin} size={30} />
-            <Text style={styles.unavailableTitle}>Google Maps is not configured</Text>
-            <Text style={styles.unavailableCopy}>
-              Add a referrer-restricted Maps JavaScript API key to the customer web environment.
-              No location has been selected.
-            </Text>
-          </View>
-        )}
-        {GOOGLE_MAPS_WEB_API_KEY && !mapReady && !message ? (
+        <View nativeID={MAP_CONTAINER_ID} style={StyleSheet.absoluteFill} />
+        {!mapReady && !message ? (
           <View pointerEvents="none" style={styles.mapLoading}>
             <ActivityIndicator color={colors.black} size="large" />
-            <Text style={styles.loadingText}>{loadingMessage}</Text>
+            <Text style={styles.loadingText}>Loading OpenFreeMap…</Text>
           </View>
         ) : null}
-        {GOOGLE_MAPS_WEB_API_KEY && !mapReady && message ? (
+        {!mapReady && message ? (
           <View pointerEvents="none" style={styles.mapUnavailable}>
             <Icon color={colors.textSecondary} icon={MapPin} size={30} />
-            <Text style={styles.unavailableTitle}>Google Maps is unavailable</Text>
+            <Text style={styles.unavailableTitle}>OpenFreeMap is unavailable</Text>
             <Text style={styles.unavailableCopy}>{message}</Text>
           </View>
         ) : null}
@@ -225,6 +146,7 @@ export default function LocationMapWebScreen() {
             <Icon color={colors.black} icon={MapPin} size={36} />
           </View>
         ) : null}
+        <Text style={styles.attribution}>{attribution}</Text>
       </View>
 
       <View style={styles.bottomPanel}>
@@ -236,7 +158,7 @@ export default function LocationMapWebScreen() {
         <Text style={styles.helper}>
           {mapReady
             ? 'Move the map to place the pin at your pickup or drop location.'
-            : 'Map confirmation stays disabled until Google Maps and usage tracking are ready.'}
+            : 'Map confirmation stays disabled until OpenFreeMap is ready.'}
         </Text>
         <Pressable
           accessibilityRole="button"
@@ -325,6 +247,18 @@ const styles = StyleSheet.create({
     left: '50%',
     marginLeft: -18,
     marginTop: -34,
+  },
+  attribution: {
+    position: 'absolute',
+    right: spacing.xs,
+    bottom: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    color: colors.textSecondary,
+    fontSize: 9,
   },
   bottomPanel: {
     padding: spacing.lg,

@@ -11,6 +11,10 @@ export interface SelectedLocation {
 export interface RecentLocationReference {
   placeId: string;
   query: string;
+  label: string;
+  address: string;
+  latitude: number;
+  longitude: number;
 }
 
 export interface LocationSuggestion {

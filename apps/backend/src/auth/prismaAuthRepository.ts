@@ -3,6 +3,10 @@ import type {
   AuthRepository,
   CustomerAuthUser,
   CustomerProfileUpdate,
+  DriverAuthRepository,
+  DriverAuthUser,
+  DriverSessionRecord,
+  DriverSessionResult,
   OtpChallengeCreationResult,
   CustomerSessionResult,
   OtpChallengeRecord,
@@ -10,6 +14,9 @@ import type {
 } from './types.js';
 
 type UserWithProfile = Prisma.UserGetPayload<{ include: { customerProfile: true } }>;
+type UserWithDriverProfile = Prisma.UserGetPayload<{
+  include: { driverProfile: true; userRoles: { include: { role: true } } };
+}>;
 
 function mapCustomerUser(user: UserWithProfile): CustomerAuthUser {
   return {
@@ -21,6 +28,23 @@ function mapCustomerUser(user: UserWithProfile): CustomerAuthUser {
     firstName: user.customerProfile?.firstName ?? null,
     lastName: user.customerProfile?.lastName ?? null,
     profileImageUrl: user.customerProfile?.profileImageUrl ?? null,
+  };
+}
+
+function mapDriverUser(user: UserWithDriverProfile): DriverAuthUser {
+  if (!user.driverProfile) {
+    throw new Error('Driver account is missing its driver profile.');
+  }
+  return {
+    id: user.id,
+    phone: user.phone ?? '',
+    status: user.status,
+    isPhoneVerified: user.isPhoneVerified,
+    firstName: user.driverProfile.firstName,
+    lastName: user.driverProfile.lastName,
+    driverProfileId: user.driverProfile.id,
+    driverVerificationStatus: user.driverProfile.status,
+    driverLicenseNumber: user.driverProfile.driverLicenseNumber,
   };
 }
 
@@ -37,6 +61,21 @@ function mapSession(
   };
 }
 
+function mapDriverSession(
+  session: Prisma.UserSessionGetPayload<{
+    include: { user: { include: { driverProfile: true; userRoles: { include: { role: true } } } } };
+  }>,
+): DriverSessionRecord {
+  return {
+    id: session.id,
+    userId: session.userId,
+    refreshTokenHash: session.refreshTokenHash,
+    expiresAt: session.expiresAt,
+    revokedAt: session.revokedAt,
+    user: mapDriverUser(session.user),
+  };
+}
+
 function splitName(fullName: string): { firstName: string; lastName: string | null } {
   const [firstName, ...remainingName] = fullName.trim().split(/\s+/);
   return {
@@ -45,7 +84,7 @@ function splitName(fullName: string): { firstName: string; lastName: string | nu
   };
 }
 
-export class PrismaAuthRepository implements AuthRepository {
+export class PrismaAuthRepository implements AuthRepository, DriverAuthRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   getActiveOtpChallenge(phone: string): Promise<OtpChallengeRecord | null> {
@@ -142,6 +181,132 @@ export class PrismaAuthRepository implements AuthRepository {
       include: { customerProfile: true },
     });
     return user ? mapCustomerUser(user) : null;
+  }
+
+  async getDriverByPhone(phone: string): Promise<DriverAuthUser | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { phone },
+      include: {
+        driverProfile: true,
+        userRoles: { include: { role: true } },
+      },
+    });
+    if (
+      !user ||
+      !user.driverProfile ||
+      !user.userRoles.some(({ role }) => role.name === 'DRIVER')
+    ) {
+      return null;
+    }
+    return mapDriverUser(user);
+  }
+
+  async createDriverSession(data: {
+    phone: string;
+    fullName?: string;
+    sessionId: string;
+    refreshTokenHash: string;
+    expiresAt: Date;
+    now: Date;
+  }): Promise<DriverSessionResult> {
+    return this.prisma.$transaction(async (transaction) => {
+      let user = await transaction.user.findUnique({
+        where: { phone: data.phone },
+        include: {
+          driverProfile: true,
+          customerProfile: true,
+          adminProfile: true,
+          userRoles: { include: { role: true } },
+        },
+      });
+
+      if (user) {
+        const hasDriverRole = user.userRoles.some(({ role }) => role.name === 'DRIVER');
+        const hasOtherRole = user.userRoles.some(({ role }) => role.name !== 'DRIVER');
+        if (hasOtherRole || user.customerProfile || user.adminProfile) {
+          return { kind: 'account-type' };
+        }
+        if (!['ACTIVE', 'PENDING_VERIFICATION'].includes(user.status)) {
+          return { kind: 'inactive' };
+        }
+        if (!user.driverProfile && !data.fullName) {
+          return { kind: 'missing-name' };
+        }
+
+        if (!hasDriverRole) {
+          const role = await transaction.role.upsert({
+            where: { name: 'DRIVER' },
+            update: {},
+            create: { name: 'DRIVER', description: 'Driver access' },
+          });
+          await transaction.userRoleAssignment.create({
+            data: { userId: user.id, roleId: role.id },
+          });
+        }
+        if (!user.driverProfile && data.fullName) {
+          await transaction.driverProfile.create({
+            data: { userId: user.id, ...splitName(data.fullName) },
+          });
+        } else if (user.driverProfile && data.fullName && !user.driverProfile.firstName) {
+          await transaction.driverProfile.update({
+            where: { userId: user.id },
+            data: splitName(data.fullName),
+          });
+        }
+        user = await transaction.user.update({
+          where: { id: user.id },
+          data: { isPhoneVerified: true },
+          include: {
+            driverProfile: true,
+            customerProfile: true,
+            adminProfile: true,
+            userRoles: { include: { role: true } },
+          },
+        });
+      } else {
+        if (!data.fullName) return { kind: 'missing-name' };
+        const role = await transaction.role.upsert({
+          where: { name: 'DRIVER' },
+          update: {},
+          create: { name: 'DRIVER', description: 'Driver access' },
+        });
+        user = await transaction.user.create({
+          data: {
+            phone: data.phone,
+            status: 'PENDING_VERIFICATION',
+            isPhoneVerified: true,
+            userRoles: { create: { roleId: role.id } },
+            driverProfile: { create: splitName(data.fullName) },
+          },
+          include: {
+            driverProfile: true,
+            customerProfile: true,
+            adminProfile: true,
+            userRoles: { include: { role: true } },
+          },
+        });
+      }
+
+      const session = await transaction.userSession.create({
+        data: {
+          id: data.sessionId,
+          userId: user.id,
+          refreshTokenHash: data.refreshTokenHash,
+          expiresAt: data.expiresAt,
+          createdAt: data.now,
+          lastUsedAt: data.now,
+        },
+        include: {
+          user: {
+            include: {
+              driverProfile: true,
+              userRoles: { include: { role: true } },
+            },
+          },
+        },
+      });
+      return { kind: 'created', session: mapDriverSession(session) };
+    });
   }
 
   async createCustomerSession(data: {
@@ -258,6 +423,28 @@ export class PrismaAuthRepository implements AuthRepository {
     return session ? mapSession(session) : null;
   }
 
+  async getDriverSessionById(id: string): Promise<DriverSessionRecord | null> {
+    const session = await this.prisma.userSession.findUnique({
+      where: { id },
+      include: {
+        user: {
+          include: {
+            driverProfile: true,
+            userRoles: { include: { role: true } },
+          },
+        },
+      },
+    });
+    if (
+      !session ||
+      !session.user.driverProfile ||
+      !session.user.userRoles.some(({ role }) => role.name === 'DRIVER')
+    ) {
+      return null;
+    }
+    return mapDriverSession(session);
+  }
+
   async rotateSession(data: {
     id: string;
     oldTokenHash: string;
@@ -290,6 +477,35 @@ export class PrismaAuthRepository implements AuthRepository {
     return this.getSessionById(data.id);
   }
 
+  async rotateDriverSession(data: {
+    id: string;
+    oldTokenHash: string;
+    newTokenHash: string;
+    expiresAt: Date;
+    now: Date;
+  }): Promise<DriverSessionRecord | null> {
+    const result = await this.prisma.userSession.updateMany({
+      where: {
+        id: data.id,
+        refreshTokenHash: data.oldTokenHash,
+        revokedAt: null,
+        expiresAt: { gt: data.now },
+        user: {
+          status: { in: ['ACTIVE', 'PENDING_VERIFICATION'] },
+          isPhoneVerified: true,
+          driverProfile: { isNot: null },
+          userRoles: { some: { role: { name: 'DRIVER' } } },
+        },
+      },
+      data: {
+        refreshTokenHash: data.newTokenHash,
+        expiresAt: data.expiresAt,
+        lastUsedAt: data.now,
+      },
+    });
+    return result.count === 1 ? this.getDriverSessionById(data.id) : null;
+  }
+
   async revokeSession(id: string, userId: string, now: Date): Promise<void> {
     await this.prisma.userSession.updateMany({
       where: { id, userId, revokedAt: null },
@@ -313,6 +529,36 @@ export class PrismaAuthRepository implements AuthRepository {
       include: { user: { include: { customerProfile: true } } },
     });
     return session ? mapSession(session) : null;
+  }
+
+  async getActiveDriverSession(
+    id: string,
+    userId: string,
+    now: Date,
+  ): Promise<DriverSessionRecord | null> {
+    const session = await this.prisma.userSession.findFirst({
+      where: {
+        id,
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: now },
+        user: {
+          status: { in: ['ACTIVE', 'PENDING_VERIFICATION'] },
+          isPhoneVerified: true,
+          driverProfile: { isNot: null },
+          userRoles: { some: { role: { name: 'DRIVER' } } },
+        },
+      },
+      include: {
+        user: {
+          include: {
+            driverProfile: true,
+            userRoles: { include: { role: true } },
+          },
+        },
+      },
+    });
+    return session ? mapDriverSession(session) : null;
   }
 
   async getCustomerProfile(userId: string): Promise<CustomerAuthUser | null> {

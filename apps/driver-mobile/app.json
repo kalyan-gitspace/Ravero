@@ -7,7 +7,17 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "scheme": "raverodriver",
-    "plugins": ["expo-router"],
+    "plugins": [
+      "expo-router",
+      "@maplibre/maplibre-react-native",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow RAVERO Driver to use your location while you are on duty."
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true
     },

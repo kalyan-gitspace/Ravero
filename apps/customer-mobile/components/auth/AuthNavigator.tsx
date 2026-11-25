@@ -23,7 +23,7 @@ export function AuthNavigator() {
     } else if (status === 'unauthenticated' && !inAuthFlow) {
       router.replace('/(auth)');
     }
-  }, [navigationState?.key, router, segments, status]);
+  }, [inAuthFlow, navigationState?.key, router, status]);
 
   if (blocked) {
     return (

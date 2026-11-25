@@ -54,6 +54,17 @@ async function main() {
     }
   }
 
+  const autoCategory = await prisma.vehicleCategory.upsert({
+    where: { slug: 'auto' },
+    update: { name: 'Auto', baseFare: 30, active: true },
+    create: {
+      name: 'Auto',
+      slug: 'auto',
+      description: 'Auto-rickshaw passenger rides',
+      baseFare: 30,
+    },
+  });
+
   await prisma.vehicleCategory.upsert({
     where: { slug: 'mini' },
     update: {},
@@ -80,8 +91,12 @@ async function main() {
         name: serviceType.name,
         description: serviceType.description,
         active: true,
+        ...(serviceType.code === 'AUTO' ? { vehicleCategoryId: autoCategory.id } : {}),
       },
-      create: serviceType,
+      create: {
+        ...serviceType,
+        ...(serviceType.code === 'AUTO' ? { vehicleCategoryId: autoCategory.id } : {}),
+      },
     });
   }
 

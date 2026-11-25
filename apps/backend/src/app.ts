@@ -7,6 +7,9 @@ import { authRouter } from './routes/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
 import { env } from './config/env.js';
+import { createMapsRouter } from './routes/maps.js';
+import { customerAuthService } from './auth/runtime.js';
+import { driverAuthRouter } from './routes/driver/auth.js';
 
 export const app: Express = express();
 
@@ -51,6 +54,8 @@ app.use((request, response, next) => {
 app.use(express.json({ limit: '1mb' }));
 app.use('/health', healthRouter);
 app.use('/api/v1/auth/customer', authRouter);
+app.use('/api/v1/auth/driver', driverAuthRouter);
+app.use('/api/v1/maps', createMapsRouter(customerAuthService));
 app.use('/api/v1/customer', customerRouter);
 app.use('/api/v1/driver', driverRouter);
 app.use('/api/v1/admin', adminRouter);

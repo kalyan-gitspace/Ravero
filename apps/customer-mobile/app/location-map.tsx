@@ -1,8 +1,8 @@
 import { ArrowLeft, MapPin } from 'lucide-react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import MapView, { PROVIDER_GOOGLE, type Region } from 'react-native-maps';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Camera, Map } from '@maplibre/maplibre-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, radii, spacing } from '@ravero/design-tokens';
 import { Icon } from '../components/Icon';
@@ -11,52 +11,57 @@ import { customerApi } from '../src/api/client';
 import type { LocationTarget } from '../src/location/types';
 import { saveRecentLocation } from '../src/location/recentLocations';
 
-const INITIAL_REGION: Region = {
+const INITIAL_CENTER = {
   latitude: 17.385,
   longitude: 78.4867,
-  latitudeDelta: 0.06,
-  longitudeDelta: 0.06,
 };
-
-function isMapsConfigured(): boolean {
-  if (Platform.OS === 'android') {
-    return Boolean(process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY);
-  }
-  if (Platform.OS === 'ios') {
-    return Boolean(process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY);
-  }
-  return false;
-}
 
 export default function LocationMapScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ target?: string }>();
   const target: LocationTarget = params.target === 'drop' ? 'drop' : 'pickup';
   const { selectLocation } = useLocationSelection();
-  const [region, setRegion] = useState(INITIAL_REGION);
+  const [center, setCenter] = useState(INITIAL_CENTER);
+  const [mapStyleUrl, setMapStyleUrl] = useState<string | null>(null);
+  const [attribution, setAttribution] = useState('© OpenStreetMap contributors · OpenFreeMap');
   const [mapReady, setMapReady] = useState(false);
   const [mapLoadError, setMapLoadError] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const mapsConfigured = isMapsConfigured();
+  useEffect(() => {
+    let active = true;
+    void customerApi.getMapConfig()
+      .then((config) => {
+        if (active) {
+          setMapStyleUrl(config.tileStyleUrl);
+          setAttribution(config.attribution);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setMessage(error instanceof Error ? error.message : 'Map configuration is unavailable.');
+        setMapLoadError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!mapsConfigured || mapReady) return;
-
     const timeout = setTimeout(() => {
       setMessage(
-        'Google Maps did not finish loading. Verify the Maps SDK is enabled, billing is active, and this key is restricted to the app identifier and signing certificate.',
+        'OpenFreeMap did not finish loading. Check your internet connection and try again.',
       );
       setMapLoadError(true);
     }, 20_000);
     return () => clearTimeout(timeout);
-  }, [mapReady, mapsConfigured]);
+  }, [mapReady]);
 
   const confirmLocation = async () => {
     setConfirming(true);
     setMessage(null);
     try {
-      const location = await customerApi.reverseGeocode(region.latitude, region.longitude);
+      const location = await customerApi.reverseGeocode(center.latitude, center.longitude);
       let saveFailed = false;
       try {
         await saveRecentLocation(location);
@@ -93,46 +98,52 @@ export default function LocationMapScreen() {
       </View>
 
       <View style={styles.mapArea}>
-        {mapsConfigured ? (
-          <MapView
-            initialRegion={INITIAL_REGION}
-            onMapReady={() => setMapReady(true)}
-            onRegionChangeComplete={setRegion}
-            provider={PROVIDER_GOOGLE}
+        {mapStyleUrl ? (
+          <Map
+            mapStyle={mapStyleUrl}
+            onDidFailLoadingMap={() => {
+              setMessage('OpenFreeMap could not load. Check your internet connection and try again.');
+              setMapLoadError(true);
+            }}
+            onDidFinishLoadingMap={() => {
+              setMapReady(true);
+              setMapLoadError(false);
+              setMessage(null);
+            }}
+            onRegionDidChange={(event) => {
+              const [longitude, latitude] = event.nativeEvent.center;
+              setCenter({ latitude, longitude });
+            }}
             style={StyleSheet.absoluteFill}
-          />
-        ) : (
-          <View style={styles.mapUnavailable}>
-            <Icon color={colors.textSecondary} icon={MapPin} size={30} />
-            <Text style={styles.unavailableTitle}>Google Maps is not configured</Text>
-            <Text style={styles.unavailableCopy}>
-              Add a platform-restricted Maps SDK key to the customer app environment, rebuild the
-              native app, and try again. No location has been selected.
-            </Text>
-          </View>
-        )}
-        {mapsConfigured && !mapReady ? (
-          mapLoadError ? (
-            <View pointerEvents="none" style={styles.mapUnavailable}>
-              <Icon color={colors.textSecondary} icon={MapPin} size={30} />
-              <Text style={styles.unavailableTitle}>Google Maps failed to load</Text>
-              <Text style={styles.unavailableCopy}>
-                Verify the API key, enabled SDK, billing, app identifier and signing-certificate
-                restrictions.
-              </Text>
-            </View>
-          ) : (
-            <View pointerEvents="none" style={styles.mapLoading}>
-              <ActivityIndicator color={colors.black} size="large" />
-              <Text style={styles.mapLoadingText}>Loading Google Maps…</Text>
-            </View>
-          )
+          >
+            <Camera
+              initialViewState={{
+                center: [INITIAL_CENTER.longitude, INITIAL_CENTER.latitude],
+                zoom: 13,
+              }}
+            />
+          </Map>
         ) : null}
-        {mapsConfigured && mapReady ? (
+        {!mapReady && !mapLoadError ? (
+          <View pointerEvents="none" style={styles.mapLoading}>
+            <ActivityIndicator color={colors.black} size="large" />
+            <Text style={styles.mapLoadingText}>Loading OpenFreeMap…</Text>
+          </View>
+        ) : null}
+        {!mapReady && mapLoadError ? (
+          <View pointerEvents="none" style={styles.mapUnavailable}>
+            <Icon color={colors.textSecondary} icon={MapPin} size={30} />
+            <Text style={styles.unavailableTitle}>OpenFreeMap is unavailable</Text>
+            <Text style={styles.unavailableCopy}>{message}</Text>
+          </View>
+        ) : null}
+        {mapReady ? (
           <View pointerEvents="none" style={styles.centerMarker}>
             <Icon color={colors.black} icon={MapPin} size={36} />
           </View>
         ) : null}
+        <Text style={styles.attribution}>{attribution}</Text>
+        <Text style={styles.attribution}>© OpenStreetMap contributors · OpenFreeMap</Text>
       </View>
 
       <View style={styles.bottomPanel}>
@@ -142,18 +153,17 @@ export default function LocationMapScreen() {
           </Text>
         ) : null}
         <Text style={styles.helper}>
-          {mapsConfigured
-            ? 'The map starts near Hyderabad, not your GPS location. Move it to place the pin at your pickup or drop location.'
-            : 'Map selection is unavailable until Google Maps SDK configuration is complete.'}
+          The map starts near Hyderabad, not your GPS location. Move it to place the pin at your
+          pickup or drop location.
         </Text>
         <Pressable
           accessibilityRole="button"
-          disabled={!mapsConfigured || confirming}
+          disabled={!mapReady || confirming}
           onPress={() => void confirmLocation()}
           style={({ pressed }) => [
             styles.confirmButton,
-            (!mapsConfigured || confirming) && styles.confirmDisabled,
-            pressed && mapsConfigured && styles.pressed,
+            (!mapReady || confirming) && styles.confirmDisabled,
+            pressed && mapReady && styles.pressed,
           ]}
         >
           {confirming ? <ActivityIndicator color={colors.white} /> : null}
@@ -231,6 +241,18 @@ const styles = StyleSheet.create({
     left: '50%',
     marginLeft: -18,
     marginTop: -34,
+  },
+  attribution: {
+    position: 'absolute',
+    right: spacing.xs,
+    bottom: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    color: colors.textSecondary,
+    fontSize: 9,
   },
   bottomPanel: {
     padding: spacing.lg,

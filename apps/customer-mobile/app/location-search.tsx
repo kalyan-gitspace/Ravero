@@ -25,13 +25,6 @@ import type { LocationSuggestion, SelectedLocation } from '../src/api/types';
 import type { LocationTarget, RecentLocationReference } from '../src/location/types';
 import { getRecentLocations, saveRecentLocation } from '../src/location/recentLocations';
 
-function createSessionToken(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
-    const random = Math.floor(Math.random() * 16);
-    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
-  });
-}
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   return 'Could not load locations. Please try again.';
@@ -39,11 +32,12 @@ function getErrorMessage(error: unknown): string {
 
 export default function LocationSearchScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ target?: string; placeId?: string; query?: string }>();
+  const params = useLocalSearchParams<{
+    target?: string;
+  }>();
   const target: LocationTarget = params.target === 'drop' ? 'drop' : 'pickup';
-  const { selectLocation } = useLocationSelection();
+  const { pickup, drop, selectLocation } = useLocationSelection();
   const inputRef = useRef<ComponentRef<typeof TextInput>>(null);
-  const sessionToken = useRef(createSessionToken());
   const requestId = useRef(0);
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
@@ -67,17 +61,22 @@ export default function LocationSearchScreen() {
   useEffect(() => {
     const text = query.trim();
     if (text.length < 2) {
-      setSuggestions([]);
-      setLoadingSuggestions(false);
+      requestId.current += 1;
       return;
     }
 
     const currentRequestId = ++requestId.current;
+    const selectedBias = target === 'drop' ? pickup : drop;
     const timer = setTimeout(() => {
       setLoadingSuggestions(true);
       setMessage(null);
       void customerApi
-        .autocompletePlaces(text, sessionToken.current)
+        .autocompletePlaces(
+          text,
+          selectedBias
+            ? { latitude: selectedBias.latitude, longitude: selectedBias.longitude }
+            : undefined,
+        )
         .then((results) => {
           if (currentRequestId === requestId.current) setSuggestions(results);
         })
@@ -92,7 +91,7 @@ export default function LocationSearchScreen() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [drop, pickup, query, target]);
 
   const completeSelection = useCallback(
     async (location: SelectedLocation, recentQuery = '') => {
@@ -119,12 +118,13 @@ export default function LocationSearchScreen() {
     setResolvingPlaceId(location.placeId);
     setMessage(null);
     try {
-      const selectedLocation = await customerApi.getPlaceDetails(
-        location.placeId,
-        undefined,
-        location.query || 'Recent location',
-      );
-      await completeSelection(selectedLocation, location.query);
+      await completeSelection({
+        label: location.label,
+        address: location.address,
+        placeId: location.placeId,
+        latitude: location.latitude,
+        longitude: location.longitude,
+      }, location.query);
     } catch (error) {
       setMessage(getErrorMessage(error));
     } finally {
@@ -132,41 +132,17 @@ export default function LocationSearchScreen() {
     }
   };
 
-  useEffect(() => {
-    if (typeof params.placeId !== 'string') return;
-
-    let active = true;
-    const recentQuery = typeof params.query === 'string' ? params.query : '';
-    setResolvingPlaceId(params.placeId);
-    setMessage(null);
-    void customerApi
-      .getPlaceDetails(params.placeId, undefined, recentQuery || 'Recent location')
-      .then((location) => {
-        if (active) return completeSelection(location, recentQuery);
-      })
-      .catch((error: unknown) => {
-        if (active) setMessage(getErrorMessage(error));
-      })
-      .finally(() => {
-        if (active) setResolvingPlaceId(null);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [completeSelection, params.placeId, params.query]);
-
   const selectSuggestion = async (suggestion: LocationSuggestion) => {
     setResolvingPlaceId(suggestion.placeId);
     setMessage(null);
     try {
-      const location = await customerApi.getPlaceDetails(
-        suggestion.placeId,
-        sessionToken.current,
-        suggestion.primaryText,
-      );
-      sessionToken.current = createSessionToken();
-      await completeSelection(location, query.trim());
+      await completeSelection({
+        label: suggestion.primaryText,
+        address: suggestion.address,
+        placeId: suggestion.placeId,
+        latitude: suggestion.latitude,
+        longitude: suggestion.longitude,
+      }, query.trim());
     } catch (error) {
       setMessage(getErrorMessage(error));
     } finally {
@@ -216,7 +192,11 @@ export default function LocationSearchScreen() {
   };
 
   const sectionsVisible = query.trim().length < 2;
-  const noResults = query.trim().length >= 2 && !loadingSuggestions && suggestions.length === 0;
+  const noResults =
+    query.trim().length >= 2 &&
+    !loadingSuggestions &&
+    suggestions.length === 0 &&
+    !message;
 
   return (
     <SafeAreaView edges={['top']} style={styles.screen}>
@@ -246,8 +226,11 @@ export default function LocationSearchScreen() {
           autoCorrect={false}
           autoFocus
           onChangeText={(text) => {
+            requestId.current += 1;
             setQuery(text);
             setMessage(null);
+            setSuggestions([]);
+            setLoadingSuggestions(text.trim().length >= 2);
           }}
           placeholder="Search a place, road, landmark..."
           placeholderTextColor={colors.textSecondary}
@@ -324,10 +307,10 @@ export default function LocationSearchScreen() {
                     </View>
                     <View style={styles.rowCopy}>
                       <Text numberOfLines={1} style={styles.rowTitle}>
-                        {location.query || 'Recent location'}
+                        {location.label || location.query || 'Recent location'}
                       </Text>
                       <Text numberOfLines={1} style={styles.rowSubtitle}>
-                        Tap to refresh place details
+                        {location.address}
                       </Text>
                     </View>
                   </Pressable>
@@ -348,7 +331,7 @@ export default function LocationSearchScreen() {
             </View>
           ) : null}
 
-          {suggestions.map((suggestion) => (
+          {query.trim().length >= 2 ? suggestions.map((suggestion) => (
             <Pressable
               accessibilityRole="button"
               disabled={resolvingPlaceId !== null}
@@ -372,7 +355,7 @@ export default function LocationSearchScreen() {
                 </Text>
               </View>
             </Pressable>
-          ))}
+          )) : null}
 
           {noResults ? (
             <Text style={styles.emptyState}>
@@ -395,7 +378,7 @@ export default function LocationSearchScreen() {
 
       {!process.env.EXPO_PUBLIC_API_URL ? (
         <Text style={styles.footer}>
-          Google Maps search is unavailable until the RAVERO backend and mapping credentials are configured.
+          Location search requires the RAVERO backend to be running.
         </Text>
       ) : null}
     </SafeAreaView>

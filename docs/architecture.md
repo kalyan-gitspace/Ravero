@@ -42,7 +42,19 @@ The RAVERO pnpm workspace contains customer and driver mobile apps, one unified 
 - central API layer for all clients
 - database connectivity and schema management
 - validation, health checks, and structured error responses
-- future real-time, payment, mapping, and business services
+- authenticated Photon search/reverse-geocoding and openrouteservice route/matrix/ETA APIs
+- provider configuration for MapLibre clients with OpenFreeMap tile styles
+- future real-time, payment, and dispatch services
+
+### Mapping services
+
+The backend owns provider integrations and credentials; the customer app renders through
+MapLibre and receives configuration from `/api/v1/maps/config`. Search and reverse
+geocoding use Photon, and route, matrix, and ETA requests use openrouteservice. The
+driver scaffold includes MapLibre and device-location packages but does not yet call the
+maps API; it will need driver authentication before integrating the protected endpoints.
+See [open-maps.md](./open-maps.md) for API details, provider terms, profile caveats, and
+PostGIS assessment.
 
 ## Shared package responsibilities
 

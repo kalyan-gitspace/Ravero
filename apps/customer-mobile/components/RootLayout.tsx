@@ -14,7 +14,7 @@ void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
 
 function AppContent() {
   const { status } = useCustomerAuth();
-  const opacity = useRef(new Animated.Value(0)).current;
+  const [opacity] = useState(() => new Animated.Value(0));
   const [nativeSplashHidden, setNativeSplashHidden] = useState(false);
   const [logoFadedIn, setLogoFadedIn] = useState(false);
   const [splashVisible, setSplashVisible] = useState(true);

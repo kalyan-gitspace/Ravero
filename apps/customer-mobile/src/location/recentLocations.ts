@@ -1,10 +1,12 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import type { SelectedLocation } from './types';
-import type { RecentLocationReference } from './types';
+import type { RecentLocationReference, SelectedLocation } from './types';
 
-const RECENT_LOCATIONS_KEY = 'ravero.location.recent-place-ids';
-const LEGACY_RECENT_LOCATIONS_KEY = 'ravero.location.recent';
+const RECENT_LOCATIONS_KEY = 'ravero.location.recent-open-maps';
+const LEGACY_RECENT_LOCATIONS_KEYS = [
+  'ravero.location.recent-place-ids',
+  'ravero.location.recent',
+];
 const MAX_RECENT_LOCATIONS = 8;
 
 async function readValue(): Promise<string | null> {
@@ -23,16 +25,18 @@ async function writeValue(value: string): Promise<void> {
   await SecureStore.setItemAsync(RECENT_LOCATIONS_KEY, value);
 }
 
-async function removeLegacyValue(): Promise<void> {
+async function removeLegacyValues(): Promise<void> {
   if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined') window.localStorage.removeItem(LEGACY_RECENT_LOCATIONS_KEY);
+    if (typeof window !== 'undefined') {
+      for (const key of LEGACY_RECENT_LOCATIONS_KEYS) window.localStorage.removeItem(key);
+    }
     return;
   }
-  await SecureStore.deleteItemAsync(LEGACY_RECENT_LOCATIONS_KEY);
+  await Promise.all(LEGACY_RECENT_LOCATIONS_KEYS.map((key) => SecureStore.deleteItemAsync(key)));
 }
 
 export async function getRecentLocations(): Promise<RecentLocationReference[]> {
-  await removeLegacyValue();
+  await removeLegacyValues();
   const stored = await readValue();
   if (!stored) return [];
 
@@ -48,7 +52,21 @@ export async function getRecentLocations(): Promise<RecentLocationReference[]> {
       'placeId' in location &&
       typeof location.placeId === 'string' &&
       'query' in location &&
-      typeof location.query === 'string',
+      typeof location.query === 'string' &&
+      'label' in location &&
+      typeof location.label === 'string' &&
+      'address' in location &&
+      typeof location.address === 'string' &&
+      'latitude' in location &&
+      typeof location.latitude === 'number' &&
+      Number.isFinite(location.latitude) &&
+      location.latitude >= -90 &&
+      location.latitude <= 90 &&
+      'longitude' in location &&
+      typeof location.longitude === 'number' &&
+      Number.isFinite(location.longitude) &&
+      location.longitude >= -180 &&
+      location.longitude <= 180,
   );
 }
 
@@ -59,7 +77,14 @@ export async function saveRecentLocation(
   if (!location.placeId) return;
   const current = await getRecentLocations();
   const next = [
-    { placeId: location.placeId, query },
+    {
+      placeId: location.placeId,
+      query: query || location.label,
+      label: location.label,
+      address: location.address,
+      latitude: location.latitude,
+      longitude: location.longitude,
+    },
     ...current.filter((saved) => saved.placeId !== location.placeId),
   ].slice(0, MAX_RECENT_LOCATIONS);
   await writeValue(JSON.stringify(next));

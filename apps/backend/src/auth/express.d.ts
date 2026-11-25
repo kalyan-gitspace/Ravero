@@ -5,6 +5,10 @@ declare global {
         userId: string;
         sessionId: string;
       };
+      driverAuth?: {
+        userId: string;
+        sessionId: string;
+      };
     }
   }
 }

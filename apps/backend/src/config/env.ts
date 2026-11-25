@@ -6,16 +6,15 @@ const optionalSecretSchema = z.preprocess(
   z.string().min(32).optional(),
 );
 
-const optionalPositiveIntegerSchema = z.preprocess(
-  (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
-  z.coerce.number().int().positive().max(2_147_483_647).optional(),
+const providerUrlSchema = z.string().url().refine(
+  (value) => new URL(value).protocol === 'https:',
+  'Provider URLs must use HTTPS.',
 );
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   HOST: z.string().min(1).default('127.0.0.1'),
-  DEV_FARE_BASE_AMOUNT: z.coerce.number().finite().nonnegative().max(100_000).default(120),
   OTP_PROVIDER: z.enum(['development', 'sms']).optional(),
   ACCESS_TOKEN_SECRET: optionalSecretSchema,
   OTP_HASH_SECRET: optionalSecretSchema,
@@ -23,15 +22,30 @@ const environmentSchema = z.object({
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().optional(),
   ),
-  GOOGLE_MAPS_SERVER_API_KEY: z.preprocess(
+  PHOTON_BASE_URL: providerUrlSchema.default('https://photon.komoot.io'),
+  OPENROUTESERVICE_BASE_URL: providerUrlSchema.default('https://api.heigit.org/openrouteservice'),
+  OPENROUTESERVICE_API_KEY: z.preprocess(
     (value) => (typeof value === 'string' ? value.trim() || undefined : value),
-    z.string().min(1).optional(),
+    z.string().optional(),
   ),
-  GOOGLE_MAPS_MONTHLY_LIMIT_AUTOCOMPLETE_REQUESTS: optionalPositiveIntegerSchema,
-  GOOGLE_MAPS_MONTHLY_LIMIT_PLACE_DETAILS_ESSENTIALS: optionalPositiveIntegerSchema,
-  GOOGLE_MAPS_MONTHLY_LIMIT_GEOCODING: optionalPositiveIntegerSchema,
-  GOOGLE_MAPS_MONTHLY_LIMIT_ROUTES_COMPUTE_ESSENTIALS: optionalPositiveIntegerSchema,
-  GOOGLE_MAPS_MONTHLY_LIMIT_DYNAMIC_MAPS_LOADS: optionalPositiveIntegerSchema,
+  OPENROUTESERVICE_PROFILE: z.enum([
+    'driving-car',
+    'driving-hgv',
+    'cycling-regular',
+    'cycling-road',
+    'cycling-mountain',
+    'foot-walking',
+    'foot-hiking',
+  ]).default('driving-car'),
+  MAP_TILE_STYLE_URL: z.string().url().refine(
+    (value) => {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password && !url.search;
+    },
+    'Map style URLs must use HTTPS and must not contain credentials or query parameters.',
+  ).default('https://tiles.openfreemap.org/styles/liberty'),
+  MAPS_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  MAPS_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
 });
 
 const parsedEnvironment = environmentSchema.safeParse(process.env);
@@ -43,11 +57,7 @@ if (!parsedEnvironment.success) {
   throw new Error(`Invalid environment configuration: ${invalidVariables.join(', ')}`);
 }
 
-const {
-  DATABASE_URL,
-  GOOGLE_MAPS_SERVER_API_KEY,
-  ...applicationEnvironment
-} = parsedEnvironment.data;
+const { DATABASE_URL, OPENROUTESERVICE_API_KEY, ...applicationEnvironment } = parsedEnvironment.data;
 const { ACCESS_TOKEN_SECRET, OTP_HASH_SECRET, OTP_PROVIDER, ...publicEnvironment } =
   applicationEnvironment;
 
@@ -85,17 +95,13 @@ export const env = {
   ACCESS_TOKEN_SECRET: ACCESS_TOKEN_SECRET ?? randomBytes(32).toString('hex'),
   OTP_HASH_SECRET: OTP_HASH_SECRET ?? randomBytes(32).toString('hex'),
   OTP_PROVIDER: OTP_PROVIDER ?? (publicEnvironment.NODE_ENV === 'production' ? 'sms' : 'development'),
-  DEV_FARE_BASE_AMOUNT: publicEnvironment.DEV_FARE_BASE_AMOUNT,
   DATABASE_URL,
-  GOOGLE_MAPS_SERVER_API_KEY,
-  GOOGLE_MAPS_MONTHLY_LIMIT_AUTOCOMPLETE_REQUESTS:
-    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_AUTOCOMPLETE_REQUESTS,
-  GOOGLE_MAPS_MONTHLY_LIMIT_PLACE_DETAILS_ESSENTIALS:
-    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_PLACE_DETAILS_ESSENTIALS,
-  GOOGLE_MAPS_MONTHLY_LIMIT_GEOCODING: publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_GEOCODING,
-  GOOGLE_MAPS_MONTHLY_LIMIT_ROUTES_COMPUTE_ESSENTIALS:
-    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_ROUTES_COMPUTE_ESSENTIALS,
-  GOOGLE_MAPS_MONTHLY_LIMIT_DYNAMIC_MAPS_LOADS:
-    publicEnvironment.GOOGLE_MAPS_MONTHLY_LIMIT_DYNAMIC_MAPS_LOADS,
+  PHOTON_BASE_URL: publicEnvironment.PHOTON_BASE_URL,
+  OPENROUTESERVICE_BASE_URL: publicEnvironment.OPENROUTESERVICE_BASE_URL,
+  OPENROUTESERVICE_API_KEY,
+  OPENROUTESERVICE_PROFILE: publicEnvironment.OPENROUTESERVICE_PROFILE,
+  MAP_TILE_STYLE_URL: publicEnvironment.MAP_TILE_STYLE_URL,
+  MAPS_CACHE_TTL_SECONDS: publicEnvironment.MAPS_CACHE_TTL_SECONDS,
+  MAPS_REQUEST_TIMEOUT_MS: publicEnvironment.MAPS_REQUEST_TIMEOUT_MS,
   isDatabaseConfigured: Boolean(DATABASE_URL),
 } as const;

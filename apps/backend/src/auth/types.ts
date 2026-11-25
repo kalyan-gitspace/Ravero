@@ -29,6 +29,27 @@ export interface SessionRecord {
   user: CustomerAuthUser;
 }
 
+export interface DriverAuthUser {
+  id: string;
+  phone: string;
+  status: string;
+  isPhoneVerified: boolean;
+  firstName: string | null;
+  lastName: string | null;
+  driverProfileId: string;
+  driverVerificationStatus: string;
+  driverLicenseNumber: string | null;
+}
+
+export interface DriverSessionRecord {
+  id: string;
+  userId: string;
+  refreshTokenHash: string;
+  expiresAt: Date;
+  revokedAt: Date | null;
+  user: DriverAuthUser;
+}
+
 export type OtpChallengeCreationResult =
   | { kind: 'created'; challenge: OtpChallengeRecord }
   | { kind: 'cooldown' }
@@ -84,3 +105,38 @@ export interface AuthRepository {
   getCustomerProfile(userId: string): Promise<CustomerAuthUser | null>;
   updateCustomerProfile(userId: string, data: CustomerProfileUpdate): Promise<CustomerAuthUser | null>;
 }
+
+export interface DriverAuthRepository extends Pick<
+  AuthRepository,
+  | 'getActiveOtpChallenge'
+  | 'createOtpChallenge'
+  | 'cancelOtpChallenge'
+  | 'incrementOtpAttempts'
+  | 'consumeOtpChallenge'
+  | 'revokeSession'
+> {
+  getDriverByPhone(phone: string): Promise<DriverAuthUser | null>;
+  createDriverSession(data: {
+    phone: string;
+    fullName?: string;
+    sessionId: string;
+    refreshTokenHash: string;
+    expiresAt: Date;
+    now: Date;
+  }): Promise<DriverSessionResult>;
+  getDriverSessionById(id: string): Promise<DriverSessionRecord | null>;
+  rotateDriverSession(data: {
+    id: string;
+    oldTokenHash: string;
+    newTokenHash: string;
+    expiresAt: Date;
+    now: Date;
+  }): Promise<DriverSessionRecord | null>;
+  getActiveDriverSession(id: string, userId: string, now: Date): Promise<DriverSessionRecord | null>;
+}
+
+export type DriverSessionResult =
+  | { kind: 'created'; session: DriverSessionRecord }
+  | { kind: 'account-type' }
+  | { kind: 'inactive' }
+  | { kind: 'missing-name' };

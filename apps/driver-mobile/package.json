@@ -3,11 +3,14 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@maplibre/maplibre-react-native": "^11.5.1",
     "@ravero/design-tokens": "workspace:*",
     "@ravero/shared": "workspace:*",
-    "expo": "~58.0.23",
-    "expo-router": "~58.0.30",
-    "expo-status-bar": "~58.0.4",
+    "expo": "~58.0.26",
+    "expo-location": "~58.0.22",
+    "expo-router": "~58.0.32",
+    "expo-secure-store": "~58.0.3",
+    "expo-status-bar": "~58.0.5",
     "react": "19.3.0",
     "react-native": "0.88.1",
     "react-native-safe-area-context": "~5.11.1",
@@ -15,11 +18,15 @@
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
+    "eslint": "9.39.5",
+    "eslint-config-expo": "~58.0.4",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"

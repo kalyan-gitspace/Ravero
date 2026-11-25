@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Bell,
   ArrowDownUp,
   ChevronRight,
@@ -9,7 +10,7 @@ import {
   Search,
   UsersRound,
 } from 'lucide-react-native';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
   Keyboard,
@@ -22,18 +23,24 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, spacing } from '@ravero/design-tokens';
 import { Icon } from '../../components/Icon';
 import { useLocationSelection } from '../../components/location/LocationSelectionContext';
+import { RouteMap } from '../../components/maps/RouteMap';
 import { customerApi } from '../../src/api/client';
-import type { BookingEstimate, BookingLocation, BookingRequest } from '../../src/api/types';
+import type {
+  BookingEstimate,
+  BookingLocation,
+  BookingRequest,
+  MapRoute,
+} from '../../src/api/types';
 import type {
   LocationTarget,
   RecentLocationReference,
 } from '../../src/location/types';
 import { getRecentLocations } from '../../src/location/recentLocations';
+import { estimateSelectedRoute, loadRidePreview } from '../../src/booking/ridePreview';
 import { QuickActionCard } from '../../components/home/QuickActionCard';
 import { RecentPlaceRow } from '../../components/home/RecentPlaceRow';
 import { ServiceCategoryGrid, type RideCategory } from '../../components/home/ServiceCategoryGrid';
@@ -48,24 +55,73 @@ const quickActions = [
   { label: 'Favourite places', icon: Heart, route: '/favourites' },
 ] as const;
 
+function parseRouteParams(
+  stopsParam: string | string[] | undefined,
+  scheduledAtParam: string | string[] | undefined,
+): {
+  stops: BookingLocation[] | null;
+  scheduledAt: string | undefined;
+  error: string | null;
+} {
+  let stops: BookingLocation[] | null = null;
+  let error: string | null = null;
+  if (typeof stopsParam === 'string') {
+    try {
+      const savedStops: unknown = JSON.parse(stopsParam);
+      if (
+        Array.isArray(savedStops) &&
+        savedStops.length <= 3 &&
+        savedStops.every(
+          (stop): stop is string => typeof stop === 'string' && stop.trim().length > 0,
+        )
+      ) {
+        stops = savedStops.map((address) => ({ label: address, address }));
+      }
+    } catch {
+      error = 'Could not load the saved stops. Please add them again.';
+    }
+  }
+  return {
+    stops,
+    scheduledAt: typeof scheduledAtParam === 'string' ? scheduledAtParam : undefined,
+    error,
+  };
+}
+
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { stops: stopsParam, scheduledAt: scheduledAtParam } =
     useLocalSearchParams<{ stops?: string; scheduledAt?: string }>();
-  const { pickup, drop, swapLocations } = useLocationSelection();
+  const { pickup, drop, selectLocation, swapLocations } = useLocationSelection();
+  const routeParams = useMemo(
+    () => parseRouteParams(stopsParam, scheduledAtParam),
+    [scheduledAtParam, stopsParam],
+  );
   const [greeting, setGreeting] = useState(() => getGreetingForTime(new Date()));
   const [recentPlaces, setRecentPlaces] = useState<RecentLocationReference[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<RideCategory>('Auto');
   const [ridePreviewVisible, setRidePreviewVisible] = useState(false);
   const [bookingRequest, setBookingRequest] = useState<BookingRequest | null>(null);
   const [bookingEstimate, setBookingEstimate] = useState<BookingEstimate | null>(null);
+  const [estimateRouteToken, setEstimateRouteToken] = useState<string | null>(null);
   const [estimateLoading, setEstimateLoading] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
-  const [bookingError, setBookingError] = useState<string | null>(null);
+  const [routeSummary, setRouteSummary] = useState<{
+    distanceKm: number;
+    durationMinutes: number;
+  } | null>(null);
+  const [routeOptions, setRouteOptions] = useState<MapRoute[]>([]);
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+  const [mapPreviewVisible, setMapPreviewVisible] = useState(false);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [bookingError, setBookingError] = useState<string | null>(routeParams.error);
   const idempotencyKey = useRef<string | null>(null);
-  const [stops, setStops] = useState<BookingLocation[]>([]);
-  const [scheduledAt, setScheduledAt] = useState<string | undefined>();
+  const routeRequestId = useRef(0);
+  const fareRequestId = useRef(0);
+  const [stops, setStops] = useState<BookingLocation[]>(routeParams.stops ?? []);
+  const [scheduledAt, setScheduledAt] = useState<string | undefined>(routeParams.scheduledAt);
   const [recentPlacesError, setRecentPlacesError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -119,26 +175,12 @@ export default function HomeScreen() {
   }, [pickup, drop]);
 
   useEffect(() => {
-    if (typeof stopsParam !== 'string') return;
-    try {
-      const savedStops: unknown = JSON.parse(stopsParam);
-      if (
-        Array.isArray(savedStops) &&
-        savedStops.length <= 3 &&
-        savedStops.every(
-          (stop): stop is string => typeof stop === 'string' && stop.trim().length > 0,
-        )
-      ) {
-        setStops(savedStops.map((address) => ({ label: address, address })));
-      }
-    } catch {
-      setBookingError('Could not load the saved stops. Please add them again.');
-    }
-  }, [stopsParam]);
-
-  useEffect(() => {
-    if (typeof scheduledAtParam === 'string') setScheduledAt(scheduledAtParam);
-  }, [scheduledAtParam]);
+    void Promise.resolve().then(() => {
+      if (routeParams.stops) setStops(routeParams.stops);
+      if (routeParams.scheduledAt) setScheduledAt(routeParams.scheduledAt);
+      if (routeParams.error) setBookingError(routeParams.error);
+    });
+  }, [routeParams]);
 
   const openLocationPicker = (target: LocationTarget) => {
     Keyboard.dismiss();
@@ -184,25 +226,103 @@ export default function HomeScreen() {
     };
     setBookingRequest(request);
     setBookingEstimate(null);
+    setEstimateRouteToken(null);
     setBookingError(null);
+    setRouteSummary(null);
+    setRouteOptions([]);
+    setSelectedRouteIndex(0);
+    setMapPreviewVisible(false);
+    setRouteError(null);
+    setRouteLoading(true);
+    const routeRequest = ++routeRequestId.current;
+    fareRequestId.current += 1;
     setEstimateLoading(true);
     setRidePreviewVisible(true);
-    void customerApi
-      .estimateBooking(request)
-      .then(setBookingEstimate)
+    void loadRidePreview(customerApi, request, (routes) => {
+      if (routeRequest !== routeRequestId.current) return;
+      setRouteOptions(routes);
+      setSelectedRouteIndex(0);
+      setRouteSummary({
+        distanceKm: routes[0].distanceKm,
+        durationMinutes: routes[0].durationMinutes,
+      });
+      setRouteLoading(false);
+    })
+      .then((result) => {
+        if (routeRequest !== routeRequestId.current) return;
+        if (result.ok) {
+          setBookingEstimate(result.estimate);
+          setEstimateRouteToken(result.fareRouteToken);
+          return;
+        }
+
+        const message = result.error instanceof Error
+          ? result.error.message
+          : result.step === 'route'
+            ? 'Could not calculate the route.'
+            : 'Could not load a fare estimate.';
+        if (result.step === 'route') setRouteError(message);
+        else setBookingError(message);
+      })
+      .finally(() => {
+        if (routeRequest !== routeRequestId.current) return;
+        setRouteLoading(false);
+        setEstimateLoading(false);
+      });
+  };
+
+  const handleSelectRoute = (index: number) => {
+    const route = routeOptions[index];
+    if (!route || !bookingRequest) return;
+
+    setSelectedRouteIndex(index);
+    setRouteSummary({
+      distanceKm: route.distanceKm,
+      durationMinutes: route.durationMinutes,
+    });
+    setBookingEstimate(null);
+    setEstimateRouteToken(null);
+    setBookingError(null);
+    setEstimateLoading(true);
+    const fareRequest = ++fareRequestId.current;
+
+    void estimateSelectedRoute(customerApi, bookingRequest, route)
+      .then((estimate) => {
+        if (fareRequest !== fareRequestId.current) return;
+        setBookingEstimate(estimate);
+        setEstimateRouteToken(route.fareRouteToken);
+      })
       .catch((error: unknown) => {
+        if (fareRequest !== fareRequestId.current) return;
         setBookingError(error instanceof Error ? error.message : 'Could not load a fare estimate.');
       })
-      .finally(() => setEstimateLoading(false));
+      .finally(() => {
+        if (fareRequest === fareRequestId.current) setEstimateLoading(false);
+      });
   };
 
   const handleCreateBooking = async () => {
-    if (!bookingRequest || !bookingEstimate || bookingLoading) return;
+    const selectedRoute = routeOptions[selectedRouteIndex];
+    if (
+      !bookingRequest ||
+      !bookingEstimate ||
+      !selectedRoute ||
+      estimateRouteToken !== selectedRoute.fareRouteToken ||
+      !routeSummary ||
+      routeLoading ||
+      estimateLoading ||
+      routeError ||
+      bookingLoading
+    ) return;
     idempotencyKey.current ??= `customer-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
     setBookingLoading(true);
     setBookingError(null);
     try {
-      await customerApi.createBooking(bookingRequest, idempotencyKey.current);
+      await customerApi.createBooking(
+        bookingRequest,
+        selectedRoute.fareRouteToken,
+        idempotencyKey.current,
+      );
       idempotencyKey.current = null;
       setRidePreviewVisible(false);
       router.push('/(tabs)/bookings');
@@ -374,15 +494,16 @@ export default function HomeScreen() {
             {recentPlaces.map((place) => (
               <RecentPlaceRow
                 key={place.placeId}
-                onPress={() =>
-                  router.push({
-                    pathname: '/location-search',
-                    params: { target: 'drop', placeId: place.placeId, query: place.query },
-                  })
-                }
+                onPress={() => selectLocation('drop', {
+                  label: place.label,
+                  address: place.address,
+                  placeId: place.placeId,
+                  latitude: place.latitude,
+                  longitude: place.longitude,
+                })}
                 place={{
-                  name: place.query || 'Recent location',
-                  address: 'Tap to refresh place details',
+                  name: place.label || place.query || 'Recent location',
+                  address: place.address,
                 }}
               />
             ))}
@@ -401,18 +522,84 @@ export default function HomeScreen() {
           <TitaniumCard onPress={() => router.push('/(tabs)/rewards')} />
         </View>
         <Text style={styles.footerNote}>
-          Booking requests are saved for development review. No routing, driver matching, payment, or dispatch is connected.
+          Ride requests are offered to eligible nearby Auto drivers. This development preview does not process online payments.
         </Text>
       </ScrollView>
 
       <Modal
         animationType="fade"
-        onRequestClose={() => setRidePreviewVisible(false)}
+        onRequestClose={() => {
+          if (mapPreviewVisible) setMapPreviewVisible(false);
+          else setRidePreviewVisible(false);
+        }}
         transparent
         visible={ridePreviewVisible}
       >
         <View style={styles.previewScrim}>
           <View style={styles.previewCard}>
+            {mapPreviewVisible ? (
+              <>
+                <Pressable
+                  accessibilityLabel="Back to ride preview"
+                  accessibilityRole="button"
+                  onPress={() => setMapPreviewVisible(false)}
+                  style={styles.mapPreviewBack}
+                >
+                  <Icon icon={ArrowLeft} size={19} />
+                  <Text style={styles.mapPreviewBackText}>Back to ride preview</Text>
+                </Pressable>
+                <View style={styles.routeMapPreview}>
+                  {pickup && drop && routeOptions[selectedRouteIndex] ? (
+                    <RouteMap
+                      destination={drop}
+                      destinationLabel={drop.label}
+                      origin={pickup}
+                      originLabel={pickup.label}
+                      route={routeOptions[selectedRouteIndex]}
+                    />
+                  ) : (
+                    <Text style={styles.routeMapUnavailable}>
+                      The selected route map is unavailable.
+                    </Text>
+                  )}
+                </View>
+                {routeSummary ? (
+                  <Text style={styles.mapPreviewMetrics}>
+                    {routeSummary.distanceKm.toFixed(1)} km · {Math.ceil(routeSummary.durationMinutes)} min
+                  </Text>
+                ) : null}
+                {routeOptions.length > 1 ? (
+                  <ScrollView
+                    contentContainerStyle={styles.mapRouteChoices}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                  >
+                    {routeOptions.map((route, index) => (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: selectedRouteIndex === index }}
+                        key={`${route.distanceMeters}-${index}`}
+                        onPress={() => handleSelectRoute(index)}
+                        style={[
+                          styles.mapRouteChoice,
+                          selectedRouteIndex === index && styles.mapRouteChoiceSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.mapRouteChoiceText,
+                            selectedRouteIndex === index && styles.mapRouteChoiceTextSelected,
+                          ]}
+                        >
+                          Route {index + 1} · {route.distanceKm.toFixed(1)} km
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                ) : null}
+              </>
+            ) : (
+              <>
             <View style={styles.previewIcon}>
               <Icon icon={Navigation2} size={21} />
             </View>
@@ -429,6 +616,30 @@ export default function HomeScreen() {
               <Text style={styles.previewLabel}>CATEGORY</Text>
               <Text style={styles.previewValue}>{selectedCategory}</Text>
             </View>
+            <View style={styles.routeSummary}>
+              <Text style={styles.previewLabel}>ROAD ROUTE</Text>
+              {routeLoading ? (
+                <Text style={styles.routeSummaryText}>Calculating distance and time…</Text>
+              ) : routeSummary ? (
+                <>
+                  <Text style={styles.routeSummaryText}>
+                    {routeSummary.distanceKm.toFixed(1)} km · {Math.ceil(routeSummary.durationMinutes)} min
+                  </Text>
+                  <Pressable
+                    accessibilityLabel="View route on map"
+                    accessibilityRole="button"
+                    onPress={() => setMapPreviewVisible(true)}
+                    style={styles.viewRouteButton}
+                  >
+                    <Text style={styles.viewRouteText}>View route on map</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <Text accessibilityRole={routeError ? 'alert' : undefined} style={styles.routeSummaryText}>
+                  {routeError ?? 'Route preview is unavailable.'}
+                </Text>
+              )}
+            </View>
             {stops.length > 0 || scheduledAt ? (
               <View style={styles.previewOptions}>
                 {stops.length > 0 ? (
@@ -444,7 +655,7 @@ export default function HomeScreen() {
               </View>
             ) : null}
             <View style={styles.farePanel}>
-              <Text style={styles.previewLabel}>DEVELOPMENT FARE ESTIMATE</Text>
+              <Text style={styles.previewLabel}>AUTO FARE ESTIMATE</Text>
               {estimateLoading ? (
                 <Text style={styles.fareValue}>Calculating…</Text>
               ) : bookingEstimate ? (
@@ -452,20 +663,44 @@ export default function HomeScreen() {
                   {bookingEstimate.currency} {bookingEstimate.totalAmount.toFixed(2)}
                 </Text>
               ) : null}
+              {bookingEstimate ? (
+                <>
+                  <Text style={styles.fareDisclaimer}>
+                    {bookingEstimate.distanceKm.toFixed(2)} km · base fare ₹{bookingEstimate.baseAmount.toFixed(2)}
+                  </Text>
+                  <Text style={styles.fareDisclaimer}>
+                    Progressive distance fare ₹{bookingEstimate.distanceAmount.toFixed(2)} · time ₹0.00 · platform ₹0.00
+                  </Text>
+                </>
+              ) : null}
               <Text style={styles.fareDisclaimer}>
-                Base fare only. Route distance, duration, availability, and final fare are not calculated.
+                Backend-calculated fare from the selected ORS route. Rounded to the nearest paisa (half-up).
               </Text>
             </View>
             <Text style={styles.previewDisclaimer}>
-              Saving creates a pending development request only. No driver is notified and no ride is dispatched.
+              Cash payment · 0% driver commission · ₹0 platform fee.
             </Text>
             {bookingError ? <Text style={styles.bookingError}>{bookingError}</Text> : null}
             <Pressable
-              disabled={estimateLoading || !bookingEstimate || bookingLoading}
+              disabled={
+                routeLoading ||
+                estimateLoading ||
+                !routeSummary ||
+                Boolean(routeError) ||
+                !bookingEstimate ||
+                bookingLoading
+              }
               onPress={() => void handleCreateBooking()}
               style={({ pressed }) => [
                 styles.previewButton,
-                (estimateLoading || !bookingEstimate || bookingLoading) && styles.previewButtonDisabled,
+                (
+                  routeLoading ||
+                  estimateLoading ||
+                  !routeSummary ||
+                  Boolean(routeError) ||
+                  !bookingEstimate ||
+                  bookingLoading
+                ) && styles.previewButtonDisabled,
                 pressed && styles.pressed,
               ]}
             >
@@ -479,6 +714,8 @@ export default function HomeScreen() {
             >
               <Text style={styles.previewCancelText}>Cancel</Text>
             </Pressable>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -709,6 +946,59 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     backgroundColor: colors.white,
   },
+  mapPreviewBack: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  mapPreviewBackText: {
+    color: colors.black,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  routeMapPreview: {
+    width: '100%',
+    height: 320,
+    overflow: 'hidden',
+    borderRadius: radii.md,
+    backgroundColor: colors.greyLight,
+  },
+  routeMapUnavailable: {
+    padding: spacing.lg,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  mapPreviewMetrics: {
+    marginTop: spacing.sm,
+    color: colors.black,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  mapRouteChoices: {
+    gap: spacing.xs,
+    paddingTop: spacing.sm,
+  },
+  mapRouteChoice: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+  },
+  mapRouteChoiceSelected: {
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+  },
+  mapRouteChoiceText: {
+    color: colors.black,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  mapRouteChoiceTextSelected: {
+    color: colors.white,
+  },
   previewIcon: {
     width: 42,
     height: 42,
@@ -756,6 +1046,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: spacing.md,
+  },
+  routeSummary: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: colors.greyLight,
+  },
+  routeSummaryText: {
+    marginTop: spacing.xs,
+    color: colors.black,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  viewRouteButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+  },
+  viewRouteText: {
+    color: colors.black,
+    fontSize: 12,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   previewDisclaimer: {
     marginTop: spacing.md,

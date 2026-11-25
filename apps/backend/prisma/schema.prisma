@@ -20,32 +20,6 @@ enum UserStatus {
   PENDING_VERIFICATION
 }
 
-enum DocumentStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  EXPIRED
-}
-
-enum NotificationType {
-  BOOKING
-  PAYMENT
-  REWARD
-  SUPPORT
-  SYSTEM
-}
-
-enum AuditAction {
-  CREATE
-  UPDATE
-  DELETE
-  LOGIN
-  LOGOUT
-  APPROVE
-  REJECT
-  ASSIGN
-}
-
 model Role {
   id          String               @id @default(uuid()) @db.Uuid
   name        String               @unique @db.VarChar(64)
@@ -184,6 +158,10 @@ model DriverProfile {
   dateOfBirth         DateTime?
   driverLicenseNumber String?   @db.VarChar(64)
   status              String    @default("PENDING") @db.VarChar(32)
+  isAvailable         Boolean   @default(false)
+  currentLatitude     Decimal?  @db.Decimal(9, 6)
+  currentLongitude    Decimal?  @db.Decimal(9, 6)
+  locationUpdatedAt   DateTime?
   preferredAreas      String[]  @default([])
   rating              Decimal?  @db.Decimal(3, 2)
   totalTrips          Int       @default(0)
@@ -195,6 +173,7 @@ model DriverProfile {
   documents          DriverDocument[]
   benefitRedemptions DriverBenefitRedemption[]
 
+  @@index([isAvailable, locationUpdatedAt])
   @@map("driver_profiles")
 }
 
@@ -297,7 +276,7 @@ model DriverDocument {
   documentNumber  String?        @db.VarChar(128)
   issueDate       DateTime?
   expiryDate      DateTime?
-  status          DocumentStatus @default(PENDING)
+  status          String         @default("PENDING") @db.VarChar(32)
   fileUrl         String?        @db.VarChar(512)
   notes           String?        @db.VarChar(500)
   createdAt       DateTime       @default(now())
@@ -314,7 +293,7 @@ model VehicleDocument {
   vehicleId      String         @db.Uuid
   documentType   String         @db.VarChar(64)
   documentNumber String?        @db.VarChar(128)
-  status         DocumentStatus @default(PENDING)
+  status         String         @default("PENDING") @db.VarChar(32)
   fileUrl        String?        @db.VarChar(512)
   expiryDate     DateTime?
   createdAt      DateTime       @default(now())
@@ -348,7 +327,7 @@ model Booking {
   dropoffAddressId String?       @db.Uuid
   idempotencyKey   String?       @db.VarChar(64)
   requestHash      String?       @db.Char(64)
-  status           String        @default("PENDING") @db.VarChar(32)
+  status           String        @default("REQUESTED") @db.VarChar(32)
   scheduledAt      DateTime?
   startedAt        DateTime?
   completedAt      DateTime?
@@ -425,6 +404,8 @@ model BookingAssignment {
 model FareEstimate {
   id           String    @id @default(uuid()) @db.Uuid
   bookingId    String    @unique @db.Uuid
+  distanceMeters Decimal @default(0) @db.Decimal(12, 2)
+  estimatedDurationSeconds Int @default(0)
   baseFare     Decimal   @db.Decimal(10, 2)
   distanceFare Decimal   @db.Decimal(10, 2)
   timeFare     Decimal   @db.Decimal(10, 2)
@@ -725,7 +706,7 @@ model Notification {
   userId    String           @db.Uuid
   title     String           @db.VarChar(200)
   body      String           @db.VarChar(1000)
-  type      NotificationType @default(SYSTEM)
+  type      String           @default("SYSTEM") @db.VarChar(32)
   isRead    Boolean          @default(false)
   metadata  Json?
   createdAt DateTime         @default(now())
@@ -741,7 +722,7 @@ model AuditLog {
   actorUserId String?     @db.Uuid
   entityType  String      @db.VarChar(128)
   entityId    String      @db.VarChar(64)
-  action      AuditAction
+  action      String   @db.VarChar(32)
   metadata    Json?
   createdAt   DateTime    @default(now())
 
@@ -760,14 +741,4 @@ model AppSetting {
   updatedAt   DateTime @updatedAt
 
   @@map("app_settings")
-}
-
-model GoogleMapsMonthlyUsage {
-  month        DateTime @db.Date
-  sku          String   @db.VarChar(64)
-  requestCount Int      @default(0) @map("request_count")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-
-  @@id([month, sku])
-  @@map("google_maps_monthly_usage")
 }

@@ -9,6 +9,9 @@ import type {
   BookingRequest,
   CustomerProfile,
   CustomerBooking,
+  MapConfig,
+  MapEta,
+  MapRoute,
   LocationSuggestion,
   SelectedLocation,
   SendOtpResponse,
@@ -78,19 +81,23 @@ class CustomerApiClient {
     return result.customer;
   }
 
-  async estimateBooking(request: BookingRequest): Promise<BookingEstimate> {
+  async estimateBooking(request: BookingRequest, fareRouteToken: string): Promise<BookingEstimate> {
     const result = await this.request<{ estimate: BookingEstimate }>(
       '/api/v1/customer/bookings/estimate',
-      { method: 'POST', body: JSON.stringify(request) },
+      { method: 'POST', body: JSON.stringify({ ...request, fareRouteToken }) },
     );
     return result.estimate;
   }
 
-  async createBooking(request: BookingRequest, idempotencyKey: string): Promise<CustomerBooking> {
+  async createBooking(
+    request: BookingRequest,
+    fareRouteToken: string,
+    idempotencyKey: string,
+  ): Promise<CustomerBooking> {
     const result = await this.request<{ booking: CustomerBooking }>('/api/v1/customer/bookings', {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ ...request, fareRouteToken }),
     });
     return result.booking;
   }
@@ -102,94 +109,85 @@ class CustomerApiClient {
 
   async autocompletePlaces(
     input: string,
-    sessionToken: string,
+    biasCoordinates?: { latitude: number; longitude: number },
   ): Promise<LocationSuggestion[]> {
+    const query = new URLSearchParams({ q: input.trim(), limit: '15' });
+    if (biasCoordinates) {
+      query.set('lat', String(biasCoordinates.latitude));
+      query.set('lon', String(biasCoordinates.longitude));
+    }
     const result = await this.request<{
-      suggestions: Array<{ placeId: string; text: string }>;
-    }>(
-      '/api/v1/customer/maps/places/autocomplete',
-      {
-        method: 'POST',
-        body: JSON.stringify({ input, sessionToken }),
-      },
-    );
-    return result.suggestions.map((suggestion) => {
-      const [primaryText, ...addressParts] = suggestion.text.split(',').map((part) => part.trim());
+      places: {
+        id: string;
+        name: string;
+        displayName: string;
+        category?: string;
+        coordinates: { latitude: number; longitude: number };
+      }[];
+    }>(`/api/v1/maps/places?${query.toString()}`);
+    return result.places.map((place) => {
+      const secondaryText = place.displayName.startsWith(`${place.name},`)
+        ? place.displayName.slice(place.name.length + 1).trim()
+        : place.displayName === place.name
+          ? ''
+          : place.displayName;
       return {
-        placeId: suggestion.placeId,
-        primaryText,
-        secondaryText: addressParts.join(', '),
+        placeId: place.id,
+        primaryText: place.name,
+        secondaryText,
+        address: place.displayName,
+        latitude: place.coordinates.latitude,
+        longitude: place.coordinates.longitude,
+        ...(place.category ? { category: place.category } : {}),
       };
     });
   }
 
-  async getPlaceDetails(
-    placeId: string,
-    sessionToken: string | undefined,
-    label: string,
-  ): Promise<SelectedLocation> {
-    const result = await this.request<{
-      place: { placeId: string; formattedAddress: string; location: { latitude: number; longitude: number } };
-    }>(
-      '/api/v1/customer/maps/places/details',
-      {
-        method: 'POST',
-        body: JSON.stringify({ placeId, ...(sessionToken ? { sessionToken } : {}) }),
-      },
-    );
-    return {
-      label,
-      address: result.place.formattedAddress,
-      placeId: result.place.placeId,
-      latitude: result.place.location.latitude,
-      longitude: result.place.location.longitude,
-    };
+  async getMapConfig(): Promise<MapConfig> {
+    return this.request<MapConfig>('/api/v1/maps/config');
   }
 
   async reverseGeocode(latitude: number, longitude: number): Promise<SelectedLocation> {
+    const query = new URLSearchParams({ lat: String(latitude), lon: String(longitude) });
     const result = await this.request<{
-      result: { placeId: string; formattedAddress: string } | null;
-    }>(
-      '/api/v1/customer/maps/geocoding/reverse',
-      {
-        method: 'POST',
-        body: JSON.stringify({ location: { latitude, longitude } }),
-      },
-    );
-    if (!result.result) {
-      throw new ApiError('Google Maps could not find an address at this location.', 404, 'ADDRESS_NOT_FOUND');
-    }
+      result: {
+        placeId: string;
+        displayName: string;
+        formattedAddress: string;
+        coordinates: { latitude: number; longitude: number };
+      };
+    }>(`/api/v1/maps/reverse?${query.toString()}`);
     return {
-      label: result.result.formattedAddress.split(',')[0] ?? result.result.formattedAddress,
+      label: result.result.displayName,
       address: result.result.formattedAddress,
       placeId: result.result.placeId,
-      latitude,
-      longitude,
+      latitude: result.result.coordinates.latitude,
+      longitude: result.result.coordinates.longitude,
     };
-  }
-
-  async reserveDynamicMapLoad(): Promise<void> {
-    await this.request<{ reserved: true }>('/api/v1/customer/maps/dynamic-maps/reserve-load', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
   }
 
   async computeRoute(
     origin: Pick<SelectedLocation, 'latitude' | 'longitude'>,
     destination: Pick<SelectedLocation, 'latitude' | 'longitude'>,
-  ): Promise<{ distanceMeters: number; durationSeconds: number }> {
+  ): Promise<MapRoute[]> {
     const result = await this.request<{
-      route: { distanceMeters: number; duration: string };
-    }>('/api/v1/customer/maps/routes/compute', {
+      routes: MapRoute[];
+    }>('/api/v1/maps/route', {
       method: 'POST',
-      body: JSON.stringify({ origin, destination, travelMode: 'DRIVE' }),
+      body: JSON.stringify({ origin, destination }),
     });
-    const durationSeconds = Number.parseFloat(result.route.duration);
-    if (!Number.isFinite(result.route.distanceMeters) || !Number.isFinite(durationSeconds)) {
-      throw new ApiError('Google Maps returned an invalid route result.', 502, 'INVALID_ROUTE');
-    }
-    return { distanceMeters: result.route.distanceMeters, durationSeconds };
+    return result.routes;
+  }
+
+  async getEta(
+    origin: Pick<SelectedLocation, 'latitude' | 'longitude'>,
+    destination: Pick<SelectedLocation, 'latitude' | 'longitude'>,
+  ): Promise<MapEta> {
+    const result = await this.request<{ eta: MapEta }>('/api/v1/maps/eta', {
+      method: 'POST',
+      body: JSON.stringify({ origin, destination }),
+    });
+    return result.eta;
   }
 
   async getBooking(bookingId: string): Promise<CustomerBooking> {

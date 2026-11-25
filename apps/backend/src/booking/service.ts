@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AppError as createAppError } from '../errors/AppError.js';
+import { calculateAutoFare } from './fare.js';
+import { verifyFareRouteToken } from './routeQuote.js';
 import type {
   BookingRecord,
   BookingRepository,
@@ -10,16 +12,16 @@ import type {
 export class CustomerBookingService {
   constructor(
     private readonly repository: BookingRepository,
-    private readonly options: { developmentBaseFare: number; now?: () => Date },
+    private readonly options: { routeQuoteSecret: string; now?: () => Date },
   ) {}
 
-  async estimate(input: CreateBookingInput): Promise<FareEstimate> {
+  async estimate(customerId: string, input: CreateBookingInput): Promise<FareEstimate> {
     const serviceType = await this.repository.getActiveServiceType(input.serviceTypeCode);
     if (!serviceType) {
       throw new createAppError(400, 'SERVICE_TYPE_UNAVAILABLE', 'This ride category is not available.');
     }
 
-    return this.createEstimate();
+    return this.createEstimate(customerId, input);
   }
 
   async create(
@@ -27,11 +29,6 @@ export class CustomerBookingService {
     input: CreateBookingInput,
     idempotencyKey: string,
   ): Promise<BookingRecord> {
-    const serviceType = await this.repository.getActiveServiceType(input.serviceTypeCode);
-    if (!serviceType) {
-      throw new createAppError(400, 'SERVICE_TYPE_UNAVAILABLE', 'This ride category is not available.');
-    }
-
     const requestHash = createHash('sha256')
       .update(
         JSON.stringify({
@@ -41,13 +38,26 @@ export class CustomerBookingService {
       )
       .digest('hex');
 
+    const existing = await this.repository.getIdempotentBooking(
+      customerId,
+      idempotencyKey,
+      requestHash,
+    );
+    if (existing) return existing;
+
+    const serviceType = await this.repository.getActiveServiceType(input.serviceTypeCode);
+    if (!serviceType) {
+      throw new createAppError(400, 'SERVICE_TYPE_UNAVAILABLE', 'This ride category is not available.');
+    }
+
+    const fareEstimate = this.createEstimate(customerId, input);
     return this.repository.createBooking({
       customerId,
       serviceType,
       request: input,
       idempotencyKey,
       requestHash,
-      fareEstimate: this.createEstimate(),
+      fareEstimate,
     });
   }
 
@@ -71,17 +81,43 @@ export class CustomerBookingService {
     return booking;
   }
 
-  private createEstimate(): FareEstimate {
+  private createEstimate(customerId: string, input: CreateBookingInput): FareEstimate {
+    if (input.serviceTypeCode !== 'AUTO') {
+      throw new createAppError(400, 'SERVICE_TYPE_UNAVAILABLE', 'Only Auto rides have an approved fare model.');
+    }
+    if (input.stops.length > 0) {
+      throw new createAppError(
+        400,
+        'FARE_ROUTE_STOPS_UNSUPPORTED',
+        'Auto fare estimates currently require a direct pickup-to-destination route.',
+      );
+    }
+
     const now = this.options.now?.() ?? new Date();
-    const baseAmount = Math.round(this.options.developmentBaseFare * 100) / 100;
+    const quote = verifyFareRouteToken(
+      input.fareRouteToken,
+      {
+        customerId,
+        origin: {
+          latitude: input.pickup.latitude ?? Number.NaN,
+          longitude: input.pickup.longitude ?? Number.NaN,
+        },
+        destination: {
+          latitude: input.dropoff.latitude ?? Number.NaN,
+          longitude: input.dropoff.longitude ?? Number.NaN,
+        },
+      },
+      this.options.routeQuoteSecret,
+      now.getTime(),
+    );
+    const fare = calculateAutoFare(quote.distanceMeters);
     return {
       currency: 'INR',
-      baseAmount,
-      distanceAmount: 0,
-      timeAmount: 0,
-      totalAmount: baseAmount,
-      isDevelopmentEstimate: true,
-      expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
+      ...fare,
+      estimatedDurationSeconds: quote.durationSeconds,
+      estimatedDurationMinutes: quote.durationSeconds / 60,
+      isDevelopmentEstimate: false,
+      expiresAt: new Date(quote.expiresAt).toISOString(),
     };
   }
 }

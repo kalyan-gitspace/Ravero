@@ -2,7 +2,7 @@ import { ArrowLeft, Bell } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, radii, spacing } from '@ravero/design-tokens';
+import { colors, spacing } from '@ravero/design-tokens';
 import { Icon } from '../components/Icon';
 
 export default function NotificationsScreen() {

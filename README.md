@@ -38,7 +38,7 @@ corepack pnpm lint
 corepack pnpm typecheck
 ```
 
-Each app has its own `.env.example` for local configuration. Copy only the variables needed by an app into its `.env` file. Environment files are ignored by Git; do not commit secrets. No external service credentials are required by this scaffold.
+Each app has its own `.env.example` for local configuration. Copy only the variables needed by an app into its `.env` file. Environment files are ignored by Git; do not commit secrets. Map routing requires an openrouteservice API key in `apps/backend/.env`; see [open-maps.md](./docs/open-maps.md) for provider setup, attribution, and usage limitations.
 
 ## Structure
 
@@ -55,4 +55,4 @@ packages/
 docs/                Architecture and setup documentation
 ```
 
-PostgreSQL, Prisma, Socket.IO, Redis, maps, payments, Firebase, and business APIs have not been connected.
+PostgreSQL and Prisma back the development backend. The backend proxies Photon and openrouteservice and exposes MapLibre/OpenFreeMap configuration; production map-provider capacity and commercial terms must be confirmed before launch. Socket.IO, Redis, payments, Firebase, and dispatch integrations are not connected.

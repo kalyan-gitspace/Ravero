@@ -8,13 +8,14 @@ import {
 } from 'node:crypto';
 
 const ACCESS_TOKEN_ISSUER = 'ravero-backend';
-const ACCESS_TOKEN_AUDIENCE = 'ravero-customer';
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+
+export type AuthRole = 'CUSTOMER' | 'DRIVER';
 
 interface AccessTokenClaims {
   sub: string;
   sid: string;
-  role: 'CUSTOMER';
+  role: AuthRole;
   iss: string;
   aud: string;
   iat: number;
@@ -53,14 +54,15 @@ export function issueAccessToken(
   sessionId: string,
   secret: string,
   now: Date,
+  role: AuthRole = 'CUSTOMER',
 ): { token: string; expiresIn: number } {
   const issuedAt = Math.floor(now.getTime() / 1000);
   const claims: AccessTokenClaims = {
     sub: userId,
     sid: sessionId,
-    role: 'CUSTOMER',
+    role,
     iss: ACCESS_TOKEN_ISSUER,
-    aud: ACCESS_TOKEN_AUDIENCE,
+    aud: `ravero-${role.toLowerCase()}`,
     iat: issuedAt,
     exp: issuedAt + ACCESS_TOKEN_TTL_SECONDS,
   };
@@ -73,6 +75,7 @@ export function verifyAccessToken(
   token: string,
   secret: string,
   now: Date,
+  expectedRole: AuthRole = 'CUSTOMER',
 ): AccessTokenClaims | null {
   const segments = token.split('.');
   if (segments.length !== 3) {
@@ -104,9 +107,9 @@ export function verifyAccessToken(
     if (
       typeof claims.sub !== 'string' ||
       typeof claims.sid !== 'string' ||
-      claims.role !== 'CUSTOMER' ||
+      claims.role !== expectedRole ||
       claims.iss !== ACCESS_TOKEN_ISSUER ||
-      claims.aud !== ACCESS_TOKEN_AUDIENCE ||
+      claims.aud !== `ravero-${expectedRole.toLowerCase()}` ||
       typeof claims.iat !== 'number' ||
       typeof claims.exp !== 'number' ||
       claims.exp <= nowSeconds ||

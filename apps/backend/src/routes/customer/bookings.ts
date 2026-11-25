@@ -24,25 +24,16 @@ const locationSchema = stopLocationSchema.extend({
 });
 
 const createBookingSchema = z.object({
-  serviceTypeCode: z.enum([
-    'AUTO',
-    'CAB',
-    'TWO_WHEELER',
-    'RENTALS',
-    'PACKAGE',
-    'SCHEDULE',
-    'TRANSPORT',
-    'MACHINERY',
-    'OUTSTATION',
-  ]),
+  serviceTypeCode: z.string().trim().min(1).max(32),
   pickup: locationSchema,
   dropoff: locationSchema,
   stops: z.array(stopLocationSchema).max(3).default([]),
+  fareRouteToken: z.string().min(1).max(2048),
   scheduledAt: z.iso.datetime().optional(),
 });
 
 const bookingService = new CustomerBookingService(new PrismaBookingRepository(), {
-  developmentBaseFare: env.DEV_FARE_BASE_AMOUNT,
+  routeQuoteSecret: env.ACCESS_TOKEN_SECRET,
 });
 
 function parseBookingInput(value: z.infer<typeof createBookingSchema>): CreateBookingInput {
@@ -78,7 +69,10 @@ export function createBookingRouter(): Router {
     }),
     validateBody(createBookingSchema),
     async (request, response) => {
+      const auth = request.customerAuth;
+      if (!auth) throw new AppError(401, 'AUTHENTICATION_REQUIRED', 'Authentication is required.');
       const estimate = await bookingService.estimate(
+        auth.userId,
         parseBookingInput(request.body as z.infer<typeof createBookingSchema>),
       );
       response.json({ success: true, data: { estimate } });

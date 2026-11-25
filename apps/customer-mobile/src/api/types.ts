@@ -33,6 +33,41 @@ export interface LocationSuggestion {
   placeId: string;
   primaryText: string;
   secondaryText: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  category?: string;
+}
+
+export interface MapConfig {
+  tileStyleUrl: string;
+  attribution: string;
+  defaultCenter: { latitude: number; longitude: number };
+  defaultZoom: number;
+  routingProfile: string;
+}
+
+export interface RouteGeometry {
+  type: 'LineString';
+  coordinates: [longitude: number, latitude: number][];
+}
+
+export interface MapRoute {
+  distanceMeters: number;
+  distanceKm: number;
+  durationSeconds: number;
+  durationMinutes: number;
+  geometry: RouteGeometry;
+  profile: string;
+  fareRouteToken: string;
+}
+
+export interface MapEta {
+  distanceMeters: number;
+  distanceKm: number;
+  durationSeconds: number;
+  durationMinutes: number;
+  etaTimestamp: string;
 }
 
 export interface SelectedLocation extends BookingLocation {
@@ -59,10 +94,23 @@ export interface BookingRequest {
 
 export interface BookingEstimate {
   currency: 'INR';
+  distanceMeters: number;
+  distanceKm: number;
+  estimatedDurationSeconds: number;
+  estimatedDurationMinutes: number;
   baseAmount: number;
   distanceAmount: number;
   timeAmount: number;
+  platformFeeAmount: number;
+  driverCommissionAmount: number;
   totalAmount: number;
+  roundingPolicy: 'NEAREST_PAISE_HALF_UP_FINAL_TOTAL';
+  distanceBreakdown?: {
+    label: string;
+    distanceKm?: number;
+    ratePerKm?: number | null;
+    amount: number;
+  }[];
   isDevelopmentEstimate: boolean;
   expiresAt: string;
 }
@@ -77,6 +125,7 @@ export interface CustomerBooking {
   scheduledAt: string | null;
   fareEstimate: BookingEstimate;
   paymentMode: 'CASH';
+  paymentStatus: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -91,6 +140,6 @@ export interface ApiErrorEnvelope {
   error: {
     code: string;
     message: string;
-    details?: Array<{ field: string; message: string }>;
+    details?: { field: string; message: string }[];
   };
 }

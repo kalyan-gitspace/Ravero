@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "RAVERO Customer",
+    "name": "RAVERO",
     "slug": "ravero-customer",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -30,6 +30,17 @@
     },
     "web": {
       "favicon": "./assets/branding/favicon.png"
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "48552423-a4c0-4a3d-8eca-34fb104ebc33"
+      }
+    },
+    "owner": "raverotech18"
   }
 }

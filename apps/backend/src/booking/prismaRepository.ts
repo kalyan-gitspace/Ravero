@@ -14,13 +14,18 @@ type BookingWithRelations = Prisma.BookingGetPayload<{
     pickupAddress: true;
     dropoffAddress: true;
     stops: { orderBy: { sequence: 'asc' } };
-    fareEstimate: true;
+    fareEstimate: { include: { breakdowns: true } };
+    paymentRecords: { orderBy: { createdAt: 'desc' } };
   };
 }>;
 
 function toBookingRecord(booking: BookingWithRelations): BookingRecord {
   if (!booking.fareEstimate) {
     throw new Error('Booking is missing its fare estimate.');
+  }
+  const paymentRecord = booking.paymentRecords[0];
+  if (!paymentRecord) {
+    throw new Error('Booking is missing its cash payment record.');
   }
 
   return {
@@ -59,14 +64,26 @@ function toBookingRecord(booking: BookingWithRelations): BookingRecord {
     scheduledAt: booking.scheduledAt,
     fareEstimate: {
       currency: 'INR',
+      distanceMeters: Number(booking.fareEstimate.distanceMeters),
+      distanceKm: Number(booking.fareEstimate.distanceMeters) / 1000,
+      estimatedDurationSeconds: booking.fareEstimate.estimatedDurationSeconds,
+      estimatedDurationMinutes: booking.fareEstimate.estimatedDurationSeconds / 60,
       baseAmount: Number(booking.fareEstimate.baseFare),
       distanceAmount: Number(booking.fareEstimate.distanceFare),
       timeAmount: Number(booking.fareEstimate.timeFare),
+      platformFeeAmount: 0,
+      driverCommissionAmount: 0,
       totalAmount: Number(booking.fareEstimate.totalAmount),
-      isDevelopmentEstimate: true,
+      roundingPolicy: 'NEAREST_PAISE_HALF_UP_FINAL_TOTAL',
+      distanceBreakdown: booking.fareEstimate.breakdowns.map((breakdown) => ({
+        label: breakdown.label,
+        amount: Number(breakdown.amount),
+      })),
+      isDevelopmentEstimate: false,
       expiresAt: (booking.fareEstimate.expiresAt ?? booking.fareEstimate.createdAt).toISOString(),
     },
     paymentMode: 'CASH',
+    paymentStatus: paymentRecord.status,
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
   };
@@ -77,7 +94,8 @@ const bookingIncludes = {
   pickupAddress: true,
   dropoffAddress: true,
   stops: { orderBy: { sequence: 'asc' as const } },
-  fareEstimate: true,
+  fareEstimate: { include: { breakdowns: true } },
+  paymentRecords: { orderBy: { createdAt: 'desc' as const } },
 } as const;
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -90,6 +108,24 @@ export class PrismaBookingRepository implements BookingRepository {
       where: { code, active: true },
       select: { id: true, code: true, name: true },
     });
+  }
+
+  async getIdempotentBooking(
+    customerId: string,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<BookingRecord | null> {
+    const existing = await prisma.booking.findUnique({
+      where: {
+        customerId_idempotencyKey: { customerId, idempotencyKey },
+      },
+      include: bookingIncludes,
+    });
+    if (!existing) return null;
+    if (existing.requestHash !== requestHash) {
+      throw new AppError(409, 'IDEMPOTENCY_KEY_REUSED', 'This request key was already used for a different booking.');
+    }
+    return toBookingRecord(existing);
   }
 
   async createBooking(data: CreateBookingRecordInput): Promise<BookingRecord> {
@@ -143,7 +179,7 @@ export class PrismaBookingRepository implements BookingRepository {
             dropoffAddressId: dropoff.id,
             idempotencyKey: data.idempotencyKey,
             requestHash: data.requestHash,
-            status: 'PENDING',
+            status: 'REQUESTED',
             scheduledAt: data.request.scheduledAt,
             stops: {
               create: data.request.stops.map((stop, index) => ({
@@ -157,6 +193,8 @@ export class PrismaBookingRepository implements BookingRepository {
             },
             fareEstimate: {
               create: {
+                distanceMeters: data.fareEstimate.distanceMeters,
+                estimatedDurationSeconds: data.fareEstimate.estimatedDurationSeconds,
                 baseFare: data.fareEstimate.baseAmount,
                 distanceFare: data.fareEstimate.distanceAmount,
                 timeFare: data.fareEstimate.timeAmount,
@@ -164,16 +202,16 @@ export class PrismaBookingRepository implements BookingRepository {
                 currency: data.fareEstimate.currency,
                 expiresAt: new Date(data.fareEstimate.expiresAt),
                 breakdowns: {
-                  create: [
-                    { label: 'Development base fare', amount: data.fareEstimate.baseAmount, type: 'BASE' },
-                    { label: 'Distance (not calculated)', amount: 0, type: 'DISTANCE' },
-                    { label: 'Duration (not calculated)', amount: 0, type: 'TIME' },
-                  ],
+                  create: (data.fareEstimate.distanceBreakdown ?? []).map((breakdown, index) => ({
+                    label: breakdown.label,
+                    amount: breakdown.amount,
+                    type: index === 0 ? 'BASE' : 'DISTANCE',
+                  })),
                 },
               },
             },
             history: {
-              create: { status: 'PENDING', note: 'Customer booking request created.' },
+              create: { status: 'REQUESTED', note: 'Customer booking request created.' },
             },
             paymentRecords: {
               create: {
@@ -233,10 +271,10 @@ export class PrismaBookingRepository implements BookingRepository {
         where: { id: bookingId, customerId },
         select: { id: true, status: true },
       });
-      if (!booking || booking.status !== 'PENDING') return null;
+      if (!booking || booking.status !== 'REQUESTED') return null;
 
       const cancellation = await transaction.booking.updateMany({
-        where: { id: bookingId, customerId, status: 'PENDING' },
+        where: { id: bookingId, customerId, status: 'REQUESTED' },
         data: { status: 'CANCELLED' },
       });
       if (cancellation.count === 0) return null;

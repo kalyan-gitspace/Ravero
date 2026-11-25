@@ -110,16 +110,14 @@ export function ServiceCategoryGrid({
   selected,
   onSelect,
 }: ServiceCategoryGridProps) {
-  const layouts = useRef(
-    new Map<CategoryName, { x: number; y: number; width: number; height: number }>(),
-  ).current;
+  const [layouts] = useState(
+    () => new Map<CategoryName, { x: number; y: number; width: number; height: number }>(),
+  );
 
-  const position = useRef(
-    new Animated.ValueXY({ x: 0, y: 0 }),
-  ).current;
+  const [position] = useState(() => new Animated.ValueXY({ x: 0, y: 0 }));
 
-  const stretchX = useRef(new Animated.Value(1)).current;
-  const stretchY = useRef(new Animated.Value(1)).current;
+  const [stretchX] = useState(() => new Animated.Value(1));
+  const [stretchY] = useState(() => new Animated.Value(1));
 
   const animation = useRef<Animated.CompositeAnimation | null>(null);
   const hasPositionedIndicator = useRef(false);
@@ -301,21 +299,24 @@ export function ServiceCategoryGrid({
 
       {categories.map((category) => {
         const isSelected = category.name === selected;
+        const isAvailable = category.name === 'Auto';
 
         return (
           <Pressable
-            accessibilityLabel={category.name}
+            accessibilityLabel={isAvailable ? category.name : `${category.name}, coming soon`}
             accessibilityRole="radio"
-            accessibilityState={{ selected: isSelected }}
+            accessibilityState={{ disabled: !isAvailable, selected: isSelected }}
+            disabled={!isAvailable}
             key={category.name}
             onLayout={(event) =>
               positionCategory(category.name, event)
             }
             onPress={() => {
-              onSelect(category.name);
+              if (isAvailable) onSelect(category.name);
             }}
             style={({ pressed }) => [
               styles.category,
+              !isAvailable && styles.categoryUnavailable,
               pressed && styles.pressed,
             ]}
           >
@@ -337,7 +338,7 @@ export function ServiceCategoryGrid({
             </View>
 
             <Text numberOfLines={1} style={styles.name}>
-              {category.name}
+              {isAvailable ? category.name : `${category.name} · Soon`}
             </Text>
           </Pressable>
         );
@@ -360,6 +361,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 6,
     zIndex: 1,
+  },
+  categoryUnavailable: {
+    opacity: 0.55,
   },
 
   selectionIndicator: {
